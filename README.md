@@ -97,12 +97,27 @@ async def main():
 asyncio.run(main())
 ```
 
+## Benchmark
+
+Includes a benchmark suite with 10 logic problems across 5 categories (deduction, transitive, constraint, contradiction, multi-step) to compare LLM-only reasoning vs LLM+Prolog reasoning.
+
+```bash
+docker run --rm -e PROLOG_REASONER_LLM_API_KEY=sk-... \
+    prolog-reasoner-dev python benchmarks/run_benchmark.py
+```
+
+Results are saved to `benchmarks/results.json`.
+
 ## Development
 
 ```bash
 # Run tests (requires Docker)
 docker build -f docker/Dockerfile -t prolog-reasoner-dev .
 docker run --rm -e PROLOG_REASONER_LLM_API_KEY=dummy prolog-reasoner-dev
+
+# Run tests with coverage
+docker run --rm -e PROLOG_REASONER_LLM_API_KEY=dummy \
+    prolog-reasoner-dev pytest tests/ -v --cov=prolog_reasoner
 
 # Or via docker compose
 docker compose -f docker/docker-compose.yml run --rm test

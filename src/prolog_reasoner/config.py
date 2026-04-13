@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     # LLM
     llm_provider: str = "openai"
-    llm_api_key: str  # Required, no default
+    llm_api_key: str = ""  # Optional: only needed for translate_to_prolog
     llm_model: str = "gpt-4o"
     llm_temperature: float = 0.0
     llm_timeout_seconds: float = 30.0

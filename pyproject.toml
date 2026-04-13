@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "prolog-reasoner"
+version = "0.1.0"
+description = "LLM-powered logical reasoning with Prolog - Calculator for logic"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "haseg" },
+]
+keywords = ["prolog", "llm", "logic", "reasoning", "mcp", "neuro-symbolic"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "fastmcp>=3.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.0"]
+anthropic = ["anthropic>=0.40"]
+all = ["openai>=1.0", "anthropic>=0.40"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.0",
+]
+
+[project.scripts]
+prolog-reasoner = "prolog_reasoner.server:main"
+
+[project.urls]
+Homepage = "https://github.com/haseg/prolog-reasoner"
+Repository = "https://github.com/haseg/prolog-reasoner"
+Issues = "https://github.com/haseg/prolog-reasoner/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/prolog_reasoner"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

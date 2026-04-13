@@ -1,0 +1,33 @@
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ..:/app
+    environment:
+      - PROLOG_REASONER_LLM_PROVIDER=openai
+      - PROLOG_REASONER_LLM_API_KEY=${PROLOG_REASONER_LLM_API_KEY:-dummy}
+      - PROLOG_REASONER_LLM_MODEL=${PROLOG_REASONER_LLM_MODEL:-gpt-4}
+    command: ["pytest", "tests/", "-v"]
+
+  test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      - PROLOG_REASONER_LLM_PROVIDER=openai
+      - PROLOG_REASONER_LLM_API_KEY=${PROLOG_REASONER_LLM_API_KEY:-dummy}
+      - PROLOG_REASONER_LLM_MODEL=${PROLOG_REASONER_LLM_MODEL:-gpt-4}
+    command: ["pytest", "tests/", "-v"]
+
+  server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      - PROLOG_REASONER_LLM_PROVIDER=${PROLOG_REASONER_LLM_PROVIDER}
+      - PROLOG_REASONER_LLM_API_KEY=${PROLOG_REASONER_LLM_API_KEY}
+      - PROLOG_REASONER_LLM_MODEL=${PROLOG_REASONER_LLM_MODEL}
+    stdin_open: true
+    command: ["prolog-reasoner"]

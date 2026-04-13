@@ -1,0 +1,5 @@
+{
+  "description": "Recorded LLM response for Socrates syllogism",
+  "query": "Is Socrates mortal? Socrates is a human. All humans are mortal.",
+  "response": "human(socrates).\nmortal(X) :- human(X).\n% Query: mortal(socrates)"
+}

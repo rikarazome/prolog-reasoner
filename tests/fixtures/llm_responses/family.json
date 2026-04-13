@@ -1,0 +1,6 @@
+{
+  "description": "Recorded LLM response for family ancestor query",
+  "query": "Who are Tom's descendants?",
+  "context": "Tom is Bob's parent. Bob is Ann's parent. Bob is Pat's parent.",
+  "response": "parent(tom, bob).\nparent(bob, ann).\nparent(bob, pat).\nancestor(X, Y) :- parent(X, Y).\nancestor(X, Y) :- parent(X, Z), ancestor(Z, Y).\n% Query: ancestor(tom, X)"
+}

@@ -4,10 +4,11 @@ Tests tool registration and invocation via FastMCP's in-memory client.
 Uses mock LLM — no API key needed.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
+import prolog_reasoner.server as server_module
 from prolog_reasoner.config import Settings
 from prolog_reasoner.executor import PrologExecutor
 from prolog_reasoner.llm_client import LLMClient
@@ -27,40 +28,39 @@ def mock_reasoner():
     return PrologReasoner(translator, executor)
 
 
+@pytest.fixture(autouse=True)
+def _inject_reasoner(mock_reasoner):
+    """Inject mock reasoner into server module, restore after test."""
+    original = server_module._reasoner
+    server_module._reasoner = mock_reasoner
+    yield
+    server_module._reasoner = original
+
+
 class TestMCPTools:
     @pytest.mark.asyncio
-    async def test_tools_registered(self, mock_reasoner):
+    async def test_tools_registered(self):
         """Verify both tools are registered on the MCP server."""
-        with patch("prolog_reasoner.server.reasoner", mock_reasoner):
-            from prolog_reasoner.server import mcp
-
-            # FastMCP stores tools internally; verify via get_tool
-            translate_tool = await mcp.get_tool("translate_to_prolog")
-            execute_tool = await mcp.get_tool("execute_prolog")
-            assert translate_tool is not None
-            assert execute_tool is not None
+        translate_tool = await server_module.mcp.get_tool("translate_to_prolog")
+        execute_tool = await server_module.mcp.get_tool("execute_prolog")
+        assert translate_tool is not None
+        assert execute_tool is not None
 
     @pytest.mark.asyncio
-    async def test_execute_tool_via_server(self, mock_reasoner):
+    async def test_execute_tool_via_server(self):
         """Verify execute_prolog tool works end-to-end."""
-        with patch("prolog_reasoner.server.reasoner", mock_reasoner):
-            from prolog_reasoner.server import execute_prolog
-
-            result = await execute_prolog(
-                prolog_code="human(socrates). mortal(X) :- human(X).",
-                query="mortal(X)",
-            )
-            assert result["success"] is True
-            assert "socrates" in result["output"]
+        result = await server_module.execute_prolog(
+            prolog_code="human(socrates). mortal(X) :- human(X).",
+            query="mortal(X)",
+        )
+        assert result["success"] is True
+        assert "socrates" in result["output"]
 
     @pytest.mark.asyncio
-    async def test_translate_tool_via_server(self, mock_reasoner):
+    async def test_translate_tool_via_server(self):
         """Verify translate_to_prolog tool works end-to-end."""
-        with patch("prolog_reasoner.server.reasoner", mock_reasoner):
-            from prolog_reasoner.server import translate_to_prolog
-
-            result = await translate_to_prolog(
-                query="Is Socrates mortal?",
-            )
-            assert result["success"] is True
-            assert "human(socrates)" in result["prolog_code"]
+        result = await server_module.translate_to_prolog(
+            query="Is Socrates mortal?",
+        )
+        assert result["success"] is True
+        assert "human(socrates)" in result["prolog_code"]

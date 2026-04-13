@@ -34,7 +34,20 @@ def create_reasoner() -> PrologReasoner:
     return PrologReasoner(translator, executor)
 
 
-reasoner = create_reasoner()
+_reasoner: PrologReasoner | None = None
+
+
+def get_reasoner() -> PrologReasoner:
+    """Lazy-load reasoner on first tool call.
+
+    Allows the module to be imported without environment variables set.
+    Settings validation happens only when a tool is actually invoked.
+    """
+    global _reasoner
+    if _reasoner is None:
+        _reasoner = create_reasoner()
+    return _reasoner
+
 
 mcp = FastMCP("prolog-reasoner")
 
@@ -61,7 +74,7 @@ async def translate_to_prolog(
         context=context,
         max_corrections=max_corrections,
     )
-    result = await reasoner.translate(request)
+    result = await get_reasoner().translate(request)
     return result.model_dump()
 
 
@@ -85,7 +98,7 @@ async def execute_prolog(
         query=query,
         max_results=max_results,
     )
-    result = await reasoner.execute(request)
+    result = await get_reasoner().execute(request)
     return result.model_dump()
 
 

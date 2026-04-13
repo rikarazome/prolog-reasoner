@@ -23,18 +23,18 @@ _UTF8_HEADER = """\
 _QUERY_WRAPPER_TEMPLATE = """\
 :- nb_setval('__pr_count', 0).
 :- ( __QUERY__,
-     nb_getval('__pr_count', N),
-     ( N >= __MAX_RESULTS__
+     nb_getval('__pr_count', __PR_N),
+     ( __PR_N >= __MAX_RESULTS__
      -> (write('__TRUNCATED__'), nl, !)
-     ;  (N1 is N + 1,
-         nb_setval('__pr_count', N1),
+     ;  (__PR_N1 is __PR_N + 1,
+         nb_setval('__pr_count', __PR_N1),
          write_canonical(__QUERY__), nl,
          fail)
      )
    ; true
    ),
-   nb_getval('__pr_count', Final),
-   ( Final =:= 0 -> write(false), nl ; true ),
+   nb_getval('__pr_count', __PR_Final),
+   ( __PR_Final =:= 0 -> write(false), nl ; true ),
    halt(0).
 :- halt(1)."""
 

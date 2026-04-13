@@ -17,8 +17,9 @@ COPY src/ src/
 # Install package with all extras
 RUN pip install --no-cache-dir ".[all,dev]"
 
-# Copy tests and remaining files
+# Copy tests, examples, benchmarks
 COPY tests/ tests/
 COPY examples/ examples/
+COPY benchmarks/ benchmarks/
 
 CMD ["pytest", "tests/", "-v"]

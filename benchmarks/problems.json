@@ -1,0 +1,132 @@
+[
+  {
+    "id": "deduction_01",
+    "category": "deduction",
+    "difficulty": "easy",
+    "description": "Basic syllogism: All humans are mortal",
+    "question": "Socrates is a human. All humans are mortal. Is Socrates mortal?",
+    "expected_answer": true,
+    "answer_type": "boolean",
+    "prolog_hint": {
+      "code": "human(socrates). mortal(X) :- human(X).",
+      "query": "mortal(socrates)"
+    }
+  },
+  {
+    "id": "deduction_02",
+    "category": "deduction",
+    "difficulty": "easy",
+    "description": "Negative deduction: not all birds fly",
+    "question": "All sparrows are birds. All birds can fly. Penguins are birds. Penguins cannot fly. Is it true that all birds can fly?",
+    "expected_answer": false,
+    "answer_type": "boolean",
+    "prolog_hint": {
+      "code": "bird(sparrow). bird(penguin). can_fly(X) :- bird(X), \\+ cannot_fly(X). cannot_fly(penguin).",
+      "query": "can_fly(penguin)"
+    }
+  },
+  {
+    "id": "transitive_01",
+    "category": "transitive",
+    "difficulty": "medium",
+    "description": "Transitive ancestor relation across 3 generations",
+    "question": "Tom is Bob's parent. Bob is Ann's parent. Bob is Pat's parent. Who are all of Tom's descendants (children and grandchildren)?",
+    "expected_answer": ["bob", "ann", "pat"],
+    "answer_type": "set",
+    "prolog_hint": {
+      "code": "parent(tom,bob). parent(bob,ann). parent(bob,pat). ancestor(X,Y) :- parent(X,Y). ancestor(X,Y) :- parent(X,Z), ancestor(Z,Y).",
+      "query": "ancestor(tom,X)"
+    }
+  },
+  {
+    "id": "transitive_02",
+    "category": "transitive",
+    "difficulty": "medium",
+    "description": "Transitive relation with 4 hops",
+    "question": "A is bigger than B. B is bigger than C. C is bigger than D. D is bigger than E. Is A bigger than E?",
+    "expected_answer": true,
+    "answer_type": "boolean",
+    "prolog_hint": {
+      "code": "bigger(a,b). bigger(b,c). bigger(c,d). bigger(d,e). bigger_than(X,Y) :- bigger(X,Y). bigger_than(X,Y) :- bigger(X,Z), bigger_than(Z,Y).",
+      "query": "bigger_than(a,e)"
+    }
+  },
+  {
+    "id": "constraint_01",
+    "category": "constraint",
+    "difficulty": "medium",
+    "description": "Map coloring: 3 regions, 3 colors, adjacent regions must differ",
+    "question": "Three regions A, B, C are on a map. A borders B. B borders C. A borders C. Each must be colored with one of red, green, blue. No two adjacent regions can share a color. How many valid colorings exist?",
+    "expected_answer": 6,
+    "answer_type": "count",
+    "prolog_hint": {
+      "code": ":- use_module(library(clpfd)).\ncolor(1). color(2). color(3).\nsolve(A,B,C) :- color(A), color(B), color(C), A \\= B, B \\= C, A \\= C.",
+      "query": "solve(A,B,C)"
+    }
+  },
+  {
+    "id": "constraint_02",
+    "category": "constraint",
+    "difficulty": "hard",
+    "description": "SEND + MORE = MONEY cryptarithmetic",
+    "question": "In the puzzle SEND + MORE = MONEY, each letter represents a unique digit 0-9. S and M cannot be 0. What is the value of MONEY?",
+    "expected_answer": 10652,
+    "answer_type": "number",
+    "prolog_hint": {
+      "code": ":- use_module(library(clpfd)).\nsolve([S,E,N,D,M,O,R,Y]) :- Vars = [S,E,N,D,M,O,R,Y], Vars ins 0..9, all_different(Vars), S #> 0, M #> 0, 1000*S+100*E+10*N+D + 1000*M+100*O+10*R+E #= 10000*M+1000*O+100*N+10*E+Y, label(Vars).",
+      "query": "solve([S,E,N,D,M,O,R,Y])"
+    }
+  },
+  {
+    "id": "contradiction_01",
+    "category": "contradiction",
+    "difficulty": "medium",
+    "description": "Detect logical contradiction in premises",
+    "question": "All cats are animals. No animals can speak. Tom is a cat. Tom can speak. Are these statements logically consistent?",
+    "expected_answer": false,
+    "answer_type": "boolean",
+    "prolog_hint": {
+      "code": "cat(tom). animal(X) :- cat(X). cannot_speak(X) :- animal(X). can_speak(tom). consistent :- \\+ (can_speak(X), cannot_speak(X)).",
+      "query": "consistent"
+    }
+  },
+  {
+    "id": "multistep_01",
+    "category": "multistep",
+    "difficulty": "hard",
+    "description": "Multi-step reasoning: who can access what",
+    "question": "Alice manages Bob. Bob manages Carol. Managers can access their direct reports' files. Managers can also access files of anyone their reports manage. Can Alice access Carol's files?",
+    "expected_answer": true,
+    "answer_type": "boolean",
+    "prolog_hint": {
+      "code": "manages(alice,bob). manages(bob,carol). can_access(X,Y) :- manages(X,Y). can_access(X,Y) :- manages(X,Z), can_access(Z,Y).",
+      "query": "can_access(alice,carol)"
+    }
+  },
+  {
+    "id": "multistep_02",
+    "category": "multistep",
+    "difficulty": "hard",
+    "description": "Knights and knaves: who is telling the truth",
+    "question": "On an island, every person is either a knight (always tells truth) or a knave (always lies). Person A says 'B is a knave'. Person B says 'A and I are different types'. What type is A and what type is B?",
+    "expected_answer": {"A": "knave", "B": "knight"},
+    "answer_type": "assignment",
+    "prolog_hint": {
+      "code": "type(knight). type(knave).\nsolve(A, B) :- type(A), type(B),\n  (A = knight -> B = knave ; B = knight),\n  (B = knight -> A \\= B ; A = B).",
+      "query": "solve(A, B)"
+    }
+  },
+  {
+    "id": "multistep_03",
+    "category": "multistep",
+    "difficulty": "hard",
+    "description": "Zebra puzzle variant (simplified 3-house version)",
+    "question": "There are 3 houses in a row (1,2,3). Each has a different color (red,green,blue) and a different pet (cat,dog,fish). The red house is immediately left of the green house. The dog owner lives in the blue house. The cat lives in house 1. What pet lives in the red house?",
+    "expected_answer": "cat",
+    "answer_type": "value",
+    "prolog_hint": {
+      "code": ":- use_module(library(clpfd)).\nsolve(RedPet) :- \n  permutation([red,green,blue], [C1,C2,C3]),\n  permutation([cat,dog,fish], [P1,P2,P3]),\n  P1 = cat,\n  nth1(DogPos, [P1,P2,P3], dog), nth1(DogPos, [C1,C2,C3], blue),\n  nth1(RedPos, [C1,C2,C3], red), nth1(GreenPos, [C1,C2,C3], green),\n  GreenPos =:= RedPos + 1,\n  nth1(RedPos, [P1,P2,P3], RedPet).",
+      "query": "solve(RedPet)"
+    }
+  }
+]

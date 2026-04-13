@@ -154,7 +154,49 @@ class TestTranslateWithCorrection:
         mock_llm.complete.side_effect = LLMError(
             "API failed", error_code="LLM_001", retryable=True
         )
-        with pytest.raises(LLMError):
+        with pytest.raises(LLMError) as exc_info:
             await translator.translate_with_correction(
                 query="test", context="", executor=executor, max_corrections=3
             )
+        assert exc_info.value.error_code == "LLM_001"
+        assert exc_info.value.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_correction_loop_translation_error_breaks(
+        self, translator, mock_llm, executor
+    ):
+        """TranslationError during correction loop should break and return failure."""
+        mock_llm.complete.side_effect = [
+            "human(socrates",               # initial: invalid syntax
+            TranslationError("empty", error_code="TRANSLATION_001"),  # correction fails
+        ]
+        result = await translator.translate_with_correction(
+            query="test", context="", executor=executor, max_corrections=3
+        )
+        # Should fail: initial code had syntax error, correction threw TranslationError
+        assert result.success is False
+
+    @pytest.mark.asyncio
+    async def test_correction_empty_response_breaks(
+        self, translator, mock_llm, executor
+    ):
+        """Empty correction response should break loop and return failure."""
+        mock_llm.complete.side_effect = [
+            "human(socrates",  # initial: invalid syntax
+            "   ",             # correction returns empty
+        ]
+        result = await translator.translate_with_correction(
+            query="test", context="", executor=executor, max_corrections=3
+        )
+        assert result.success is False
+
+    @pytest.mark.asyncio
+    async def test_metadata_has_translation_time(self, translator, mock_llm, executor):
+        """All results should include translation_time_ms in metadata."""
+        mock_llm.complete.return_value = "human(socrates).\n% Query: human(X)"
+        result = await translator.translate_with_correction(
+            query="test", context="", executor=executor, max_corrections=3
+        )
+        assert "translation_time_ms" in result.metadata
+        assert isinstance(result.metadata["translation_time_ms"], int)
+        assert result.metadata["translation_time_ms"] >= 0

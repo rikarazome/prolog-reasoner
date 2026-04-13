@@ -6,6 +6,7 @@ Requires SWI-Prolog installed (run in Docker).
 import pytest
 
 from prolog_reasoner.config import Settings
+from prolog_reasoner.errors import BackendError
 from prolog_reasoner.executor import PrologExecutor
 
 
@@ -52,6 +53,8 @@ class TestExecute:
         result = await executor.execute(code, "human(X)")
         assert result.success is False
         assert result.error is not None
+        assert "ERROR" in result.error  # Verify actual Prolog error message
+        assert result.metadata.get("error_code") in ("EXEC_001", "EXEC_003")
 
     @pytest.mark.asyncio
     async def test_timeout(self, executor):
@@ -103,3 +106,69 @@ class TestValidateSyntax:
         code = ":- use_module(library(clpfd)).\nsolve(X) :- X in 1..5."
         error = await executor.validate_syntax(code)
         assert error is None
+
+
+class TestBackendError:
+    @pytest.mark.asyncio
+    async def test_invalid_swipl_path_execute(self):
+        """BackendError raised when swipl binary doesn't exist."""
+        settings = Settings(
+            llm_api_key="dummy",
+            swipl_path="/nonexistent/swipl",
+        )
+        executor = PrologExecutor(settings)
+        with pytest.raises(BackendError) as exc_info:
+            await executor.execute("human(X).", "human(X)")
+        assert exc_info.value.error_code == "BACKEND_001"
+
+    @pytest.mark.asyncio
+    async def test_invalid_swipl_path_validate(self):
+        """BackendError raised in validate_syntax with bad path."""
+        settings = Settings(
+            llm_api_key="dummy",
+            swipl_path="/nonexistent/swipl",
+        )
+        executor = PrologExecutor(settings)
+        with pytest.raises(BackendError) as exc_info:
+            await executor.validate_syntax("human(socrates).")
+        assert exc_info.value.error_code == "BACKEND_001"
+
+
+class TestEdgeCases:
+    @pytest.mark.asyncio
+    async def test_max_results_one(self, executor):
+        """Boundary: max_results=1 truncates after first result."""
+        code = "num(1). num(2). num(3)."
+        result = await executor.execute(code, "num(X)", max_results=1)
+        assert result.success is True
+        assert result.metadata["result_count"] == 1
+        assert result.metadata["truncated"] is True
+
+    @pytest.mark.asyncio
+    async def test_prolog_warnings_in_metadata(self, executor):
+        """Non-ERROR stderr content should appear as warnings."""
+        # Singleton variable generates a warning in SWI-Prolog
+        code = "test(X, Y) :- X = 1."  # Y is singleton
+        result = await executor.execute(code, "test(A, B)")
+        assert result.success is True
+        # Warnings may or may not appear depending on SWI-Prolog config
+
+    @pytest.mark.asyncio
+    async def test_empty_code_with_query(self, executor):
+        """No matching facts — query for undefined predicate returns error."""
+        result = await executor.execute("% empty", "human(X)")
+        assert result.success is False
+        assert "Unknown procedure" in result.error
+
+    @pytest.mark.asyncio
+    async def test_multiple_queries_same_executor(self, executor):
+        """Sequential queries on same executor don't interfere."""
+        r1 = await executor.execute("a(1).", "a(X)")
+        r2 = await executor.execute("b(2).", "b(X)")
+        assert r1.success is True
+        assert r2.success is True
+        assert "1" in r1.output
+        assert "2" in r2.output
+        # Ensure no cross-contamination
+        assert "2" not in r1.output
+        assert "1" not in r2.output

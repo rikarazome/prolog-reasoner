@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import tempfile
 import time
 
 from prolog_reasoner.config import Settings
@@ -77,9 +78,17 @@ class PrologExecutor:
         prolog_input = _UTF8_HEADER + "\n" + prolog_code + "\n" + wrapper
 
         start_time = time.monotonic()
+
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".pl", encoding="utf-8", delete=False,
+        )
         try:
-            proc = await self._start_swipl()
+            tmp.write(prolog_input)
+            tmp.close()
+
+            proc = await self._start_swipl(tmp.name)
         except Exception as exc:
+            os.unlink(tmp.name)
             raise BackendError(
                 f"Failed to start SWI-Prolog: {exc}",
                 error_code="BACKEND_001",
@@ -87,12 +96,13 @@ class PrologExecutor:
 
         try:
             stdout, stderr = await asyncio.wait_for(
-                proc.communicate(input=prolog_input.encode("utf-8")),
+                proc.communicate(),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
+            os.unlink(tmp.name)
             elapsed = time.monotonic() - start_time
             logger.warning(f"Prolog execution timed out after {elapsed:.1f}s")
             return ExecutionResult(
@@ -103,6 +113,7 @@ class PrologExecutor:
                 metadata={"error_code": "EXEC_002"},
             )
 
+        os.unlink(tmp.name)
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
         stdout_text = stdout.decode("utf-8")
         stderr_text = stderr.decode("utf-8")
@@ -174,9 +185,16 @@ class PrologExecutor:
         """
         code = _UTF8_HEADER + "\n" + prolog_code + "\n:- halt(0).\n"
 
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".pl", encoding="utf-8", delete=False,
+        )
         try:
-            proc = await self._start_swipl()
+            tmp.write(code)
+            tmp.close()
+
+            proc = await self._start_swipl(tmp.name)
         except Exception as exc:
+            os.unlink(tmp.name)
             raise BackendError(
                 f"Failed to start SWI-Prolog: {exc}",
                 error_code="BACKEND_001",
@@ -184,14 +202,16 @@ class PrologExecutor:
 
         try:
             _, stderr = await asyncio.wait_for(
-                proc.communicate(input=code.encode("utf-8")),
+                proc.communicate(),
                 timeout=self._default_timeout,
             )
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
+            os.unlink(tmp.name)
             return f"Syntax check timed out after {self._default_timeout}s"
 
+        os.unlink(tmp.name)
         stderr_text = stderr.decode("utf-8")
         error_lines = [
             line for line in stderr_text.splitlines() if "ERROR:" in line
@@ -201,13 +221,13 @@ class PrologExecutor:
 
         return None
 
-    async def _start_swipl(self) -> asyncio.subprocess.Process:
-        """Start a SWI-Prolog subprocess."""
+    async def _start_swipl(self, script_path: str) -> asyncio.subprocess.Process:
+        """Start a SWI-Prolog subprocess loading a script file."""
         return await asyncio.create_subprocess_exec(
             self._swipl_path,
             "-f", "none",
             "-q",
-            stdin=asyncio.subprocess.PIPE,
+            "-l", script_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env={**os.environ, "LANG": "C.UTF-8"},

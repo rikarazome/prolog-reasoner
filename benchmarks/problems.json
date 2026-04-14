@@ -26,6 +26,58 @@
     }
   },
   {
+    "id": "deduction_03",
+    "category": "deduction",
+    "difficulty": "medium",
+    "description": "4-step taxonomy chain",
+    "question": "All tulips are flowers. All flowers are plants. All plants are living things. All living things need water. Rose is a tulip. Does Rose need water?",
+    "expected_answer": true,
+    "answer_type": "boolean",
+    "prolog_hint": {
+      "code": "tulip(rose).\nflower(X) :- tulip(X).\nplant(X) :- flower(X).\nliving_thing(X) :- plant(X).\nneeds_water(X) :- living_thing(X).",
+      "query": "needs_water(rose)"
+    }
+  },
+  {
+    "id": "deduction_04",
+    "category": "deduction",
+    "difficulty": "medium",
+    "description": "Disjunctive syllogism with elimination",
+    "question": "Bob likes exactly one of tea, coffee, or juice. Bob does not like tea. Bob does not like coffee. What does Bob like?",
+    "expected_answer": "juice",
+    "answer_type": "value",
+    "prolog_hint": {
+      "code": "drink(tea). drink(coffee). drink(juice).\nnot_likes(bob, tea).\nnot_likes(bob, coffee).\nbobs_drink(D) :- drink(D), \\+ not_likes(bob, D).",
+      "query": "bobs_drink(X)"
+    }
+  },
+  {
+    "id": "deduction_05",
+    "category": "deduction",
+    "difficulty": "medium",
+    "description": "Category aggregation from premises",
+    "question": "A box contains only red, green, or blue balls. There are 0 red balls. There are 10 green balls. There are 5 blue balls. How many balls are in the box total?",
+    "expected_answer": 15,
+    "answer_type": "number",
+    "prolog_hint": {
+      "code": "count(red, 0). count(green, 10). count(blue, 5).\ntotal(T) :- findall(N, count(_, N), L), sum_list(L, T).",
+      "query": "total(T)"
+    }
+  },
+  {
+    "id": "deduction_06",
+    "category": "deduction",
+    "difficulty": "medium",
+    "description": "Shared property via subclass chain",
+    "question": "All dogs bark. Rex is a dog. Fido is a poodle. All poodles are dogs. Do both Rex and Fido bark?",
+    "expected_answer": true,
+    "answer_type": "boolean",
+    "prolog_hint": {
+      "code": "dog(rex).\npoodle(fido).\ndog(X) :- poodle(X).\nbarks(X) :- dog(X).\nboth_bark :- barks(rex), barks(fido).",
+      "query": "both_bark"
+    }
+  },
+  {
     "id": "transitive_01",
     "category": "transitive",
     "difficulty": "medium",
@@ -49,6 +101,58 @@
     "prolog_hint": {
       "code": "bigger(a,b). bigger(b,c). bigger(c,d). bigger(d,e). bigger_than(X,Y) :- bigger(X,Y). bigger_than(X,Y) :- bigger(X,Z), bigger_than(Z,Y).",
       "query": "bigger_than(a,e)"
+    }
+  },
+  {
+    "id": "transitive_03",
+    "category": "transitive",
+    "difficulty": "medium",
+    "description": "7-hop reachability chain",
+    "question": "There are directed edges: a-to-b, b-to-c, c-to-d, d-to-e, e-to-f, f-to-g, g-to-h. Is h reachable from a by following edges?",
+    "expected_answer": true,
+    "answer_type": "boolean",
+    "prolog_hint": {
+      "code": "edge(a,b). edge(b,c). edge(c,d). edge(d,e). edge(e,f). edge(f,g). edge(g,h).\nreachable(X,Y) :- edge(X,Y).\nreachable(X,Y) :- edge(X,Z), reachable(Z,Y).",
+      "query": "reachable(a,h)"
+    }
+  },
+  {
+    "id": "transitive_04",
+    "category": "transitive",
+    "difficulty": "hard",
+    "description": "Total descendant count over a family tree",
+    "question": "Alice has children Bob and Carol. Bob has children Dave and Eve. Carol has child Frank. Dave has child Gary. How many total descendants (children plus all deeper) does Alice have?",
+    "expected_answer": 6,
+    "answer_type": "count",
+    "prolog_hint": {
+      "code": "parent(alice, bob). parent(alice, carol).\nparent(bob, dave). parent(bob, eve).\nparent(carol, frank).\nparent(dave, gary).\ndescendant(X,Y) :- parent(X,Y).\ndescendant(X,Y) :- parent(X,Z), descendant(Z,Y).\ncount_descendants(P, N) :- findall(D, descendant(P, D), L), length(L, N).",
+      "query": "count_descendants(alice, N)"
+    }
+  },
+  {
+    "id": "transitive_05",
+    "category": "transitive",
+    "difficulty": "medium",
+    "description": "DAG reachability with multiple paths",
+    "question": "Flight routes: A to B, A to C, B to D, C to D, D to E. Flights are one-way. Can you travel from A to E by any sequence of flights?",
+    "expected_answer": true,
+    "answer_type": "boolean",
+    "prolog_hint": {
+      "code": "flight(a,b). flight(a,c). flight(b,d). flight(c,d). flight(d,e).\nreachable(X,Y) :- flight(X,Y).\nreachable(X,Y) :- flight(X,Z), reachable(Z,Y).",
+      "query": "reachable(a,e)"
+    }
+  },
+  {
+    "id": "transitive_06",
+    "category": "transitive",
+    "difficulty": "medium",
+    "description": "Deep taxonomy subclass reasoning",
+    "question": "Mammals are animals. Birds are animals. Dogs are mammals. Cats are mammals. Poodles are dogs. Is a poodle an animal?",
+    "expected_answer": true,
+    "answer_type": "boolean",
+    "prolog_hint": {
+      "code": "subclass(mammals, animals). subclass(birds, animals).\nsubclass(dogs, mammals). subclass(cats, mammals).\nsubclass(poodles, dogs).\nis_a(X, Y) :- subclass(X, Y).\nis_a(X, Y) :- subclass(X, Z), is_a(Z, Y).",
+      "query": "is_a(poodles, animals)"
     }
   },
   {
@@ -78,6 +182,71 @@
     }
   },
   {
+    "id": "constraint_03",
+    "category": "constraint",
+    "difficulty": "hard",
+    "description": "3x3 magic square partial reconstruction",
+    "question": "In a 3x3 magic square using digits 1-9 each exactly once, all rows, columns, and both diagonals sum to 15. The center cell is 5, the top-left is 2, and the top-right is 4. What is the value of the bottom-middle cell?",
+    "expected_answer": 1,
+    "answer_type": "number",
+    "prolog_hint": {
+      "code": ":- use_module(library(clpfd)).\nsolve(BotMid) :-\n  Vars = [A,B,C,D,E,F,G,H,I],\n  Vars ins 1..9,\n  all_different(Vars),\n  A #= 2, C #= 4, E #= 5,\n  A+B+C #= 15, D+E+F #= 15, G+H+I #= 15,\n  A+D+G #= 15, B+E+H #= 15, C+F+I #= 15,\n  A+E+I #= 15, C+E+G #= 15,\n  label(Vars),\n  BotMid #= H.",
+      "query": "solve(BotMid)"
+    }
+  },
+  {
+    "id": "constraint_04",
+    "category": "constraint",
+    "difficulty": "hard",
+    "description": "6-queens solution count",
+    "question": "In how many distinct ways can 6 non-attacking queens be placed on a 6x6 chessboard (where each column has exactly one queen)?",
+    "expected_answer": 4,
+    "answer_type": "count",
+    "prolog_hint": {
+      "code": ":- use_module(library(clpfd)).\nqueens(Qs, N) :-\n  length(Qs, N),\n  Qs ins 1..N,\n  all_different(Qs),\n  safe(Qs),\n  label(Qs).\nsafe([]).\nsafe([Q|Qs]) :- no_attack(Q, Qs, 1), safe(Qs).\nno_attack(_, [], _).\nno_attack(Q, [Q1|Qs], D) :-\n  Q #\\= Q1+D, Q #\\= Q1-D, D1 is D+1, no_attack(Q, Qs, D1).\ncount(N) :- findall(_, queens(_, 6), L), length(L, N).",
+      "query": "count(N)"
+    }
+  },
+  {
+    "id": "constraint_05",
+    "category": "constraint",
+    "difficulty": "hard",
+    "description": "4-position Einstein-lite puzzle",
+    "question": "Four friends Alice, Bob, Carol, Dave live in four consecutive houses numbered 1, 2, 3, 4 (one person per house). Alice lives immediately right of Bob. Carol lives in house 1. Dave is not adjacent to Alice. Who lives in house 4?",
+    "expected_answer": "alice",
+    "answer_type": "value",
+    "prolog_hint": {
+      "code": "solve(H4) :-\n  permutation([alice, bob, carol, dave], [H1, H2, H3, H4]),\n  H1 = carol,\n  nth1(BobPos, [H1,H2,H3,H4], bob),\n  nth1(AlicePos, [H1,H2,H3,H4], alice),\n  AlicePos =:= BobPos + 1,\n  nth1(DavePos, [H1,H2,H3,H4], dave),\n  abs(DavePos - AlicePos) =\\= 1.",
+      "query": "solve(H4)"
+    }
+  },
+  {
+    "id": "constraint_06",
+    "category": "constraint",
+    "difficulty": "medium",
+    "description": "Graph coloring: K4 with 4 colors",
+    "question": "A complete graph K4 has 4 vertices where every pair is connected. Using 4 available colors, how many distinct proper colorings exist (adjacent vertices must have different colors, and the 4 vertices are distinguishable)?",
+    "expected_answer": 24,
+    "answer_type": "count",
+    "prolog_hint": {
+      "code": ":- use_module(library(clpfd)).\nk4_color(V1, V2, V3, V4) :-\n  [V1,V2,V3,V4] ins 1..4,\n  all_different([V1,V2,V3,V4]),\n  label([V1,V2,V3,V4]).\ncount(N) :- findall(_, k4_color(_,_,_,_), L), length(L, N).",
+      "query": "count(N)"
+    }
+  },
+  {
+    "id": "constraint_07",
+    "category": "constraint",
+    "difficulty": "hard",
+    "description": "0-1 knapsack maximum value",
+    "question": "You have a backpack with capacity 10 kg. Four items are available, each can be taken at most once: A (3kg, value 5), B (4kg, value 7), C (5kg, value 9), D (2kg, value 3). What is the maximum total value achievable without exceeding capacity?",
+    "expected_answer": 17,
+    "answer_type": "number",
+    "prolog_hint": {
+      "code": ":- use_module(library(clpfd)).\nknapsack(V) :-\n  [A,B,C,D] ins 0..1,\n  3*A + 4*B + 5*C + 2*D #=< 10,\n  V #= 5*A + 7*B + 9*C + 3*D,\n  label([A,B,C,D]).\nbest(Max) :- findall(V, knapsack(V), Vs), max_list(Vs, Max).",
+      "query": "best(Max)"
+    }
+  },
+  {
     "id": "contradiction_01",
     "category": "contradiction",
     "difficulty": "medium",
@@ -88,6 +257,45 @@
     "prolog_hint": {
       "code": "cat(tom). animal(X) :- cat(X). cannot_speak(X) :- animal(X). can_speak(tom). consistent :- \\+ (can_speak(X), cannot_speak(X)).",
       "query": "consistent"
+    }
+  },
+  {
+    "id": "contradiction_02",
+    "category": "contradiction",
+    "difficulty": "medium",
+    "description": "Same entity in mutually exclusive categories",
+    "question": "All gods are immortal. All humans are mortal. Nothing can be both mortal and immortal. Zeus is a god. Zeus is a human. Are these premises logically consistent?",
+    "expected_answer": false,
+    "answer_type": "boolean",
+    "prolog_hint": {
+      "code": "god(zeus). human(zeus).\nimmortal(X) :- god(X).\nmortal(X) :- human(X).\nconsistent :- \\+ (mortal(X), immortal(X)).",
+      "query": "consistent"
+    }
+  },
+  {
+    "id": "contradiction_03",
+    "category": "contradiction",
+    "difficulty": "medium",
+    "description": "Universal claim contradicted by counterexample",
+    "question": "All swans are white. There are two swans: Odette, which is white, and Blacky, which is black. Is the claim that all swans are white consistent with the observations?",
+    "expected_answer": false,
+    "answer_type": "boolean",
+    "prolog_hint": {
+      "code": "swan(odette). swan(blacky).\ncolor(odette, white). color(blacky, black).\nall_swans_white :- \\+ (swan(X), color(X, C), C \\= white).",
+      "query": "all_swans_white"
+    }
+  },
+  {
+    "id": "contradiction_04",
+    "category": "contradiction",
+    "difficulty": "easy",
+    "description": "Numerical constraint contradiction",
+    "question": "Does there exist an integer X that satisfies both X greater than 10 and X less than 5?",
+    "expected_answer": false,
+    "answer_type": "boolean",
+    "prolog_hint": {
+      "code": ":- use_module(library(clpfd)).\nexists_x :- X in -100..100, X #> 10, X #< 5, label([X]).",
+      "query": "exists_x"
     }
   },
   {
@@ -127,6 +335,58 @@
     "prolog_hint": {
       "code": ":- use_module(library(clpfd)).\nsolve(RedPet) :- \n  permutation([red,green,blue], [C1,C2,C3]),\n  permutation([cat,dog,fish], [P1,P2,P3]),\n  P1 = cat,\n  nth1(DogPos, [P1,P2,P3], dog), nth1(DogPos, [C1,C2,C3], blue),\n  nth1(RedPos, [C1,C2,C3], red), nth1(GreenPos, [C1,C2,C3], green),\n  GreenPos =:= RedPos + 1,\n  nth1(RedPos, [P1,P2,P3], RedPet).",
       "query": "solve(RedPet)"
+    }
+  },
+  {
+    "id": "multistep_04",
+    "category": "multistep",
+    "difficulty": "hard",
+    "description": "Game-theoretic winner via recursive minimax",
+    "question": "Alice and Bob play a stone-removal game. Start with 16 stones. On each turn a player removes 1, 2, or 3 stones. The player who takes the last stone wins. Alice moves first. Both play optimally. Who wins?",
+    "expected_answer": "bob",
+    "answer_type": "value",
+    "prolog_hint": {
+      "code": "wins_from(N) :-\n  N > 0,\n  between(1, 3, M),\n  M =< N,\n  N1 is N - M,\n  \\+ wins_from(N1).\nresult(alice) :- wins_from(16).\nresult(bob) :- \\+ wins_from(16).",
+      "query": "result(R)"
+    }
+  },
+  {
+    "id": "multistep_05",
+    "category": "multistep",
+    "difficulty": "hard",
+    "description": "Bipartite matching: count valid assignments",
+    "question": "Four workers Alice, Bob, Carol, Dave must each take exactly one of four tasks: coding, design, testing, deployment (one worker per task). Alice can only do coding or design. Bob can only do design or testing. Carol can only do testing or deployment. Dave can only do deployment or coding. How many valid assignments are possible?",
+    "expected_answer": 2,
+    "answer_type": "count",
+    "prolog_hint": {
+      "code": "can_do(alice, coding). can_do(alice, design).\ncan_do(bob, design). can_do(bob, testing).\ncan_do(carol, testing). can_do(carol, deployment).\ncan_do(dave, deployment). can_do(dave, coding).\nassign(A, B, C, D) :-\n  can_do(alice, A), can_do(bob, B), can_do(carol, C), can_do(dave, D),\n  A \\= B, A \\= C, A \\= D, B \\= C, B \\= D, C \\= D.\ncount(N) :- findall(_, assign(_,_,_,_), L), length(L, N).",
+      "query": "count(N)"
+    }
+  },
+  {
+    "id": "multistep_06",
+    "category": "multistep",
+    "difficulty": "hard",
+    "description": "3-person knights and knaves with chained statements",
+    "question": "On an island, every person is either a knight (always truthful) or a knave (always lies). A says: 'B is a knight'. B says: 'C is a knave'. C says: 'A and B are different types'. How many of A, B, C are knights?",
+    "expected_answer": 2,
+    "answer_type": "number",
+    "prolog_hint": {
+      "code": "type(knight). type(knave).\nsolve(Count) :-\n  type(A), type(B), type(C),\n  ( (A = knight, B = knight) ; (A = knave, B \\= knight) ),\n  ( (B = knight, C = knave) ; (B = knave, C \\= knave) ),\n  ( (C = knight, A \\= B) ; (C = knave, A = B) ),\n  count_knights([A, B, C], Count).\ncount_knights([], 0).\ncount_knights([knight|T], N) :- count_knights(T, N1), N is N1 + 1.\ncount_knights([knave|T], N) :- count_knights(T, N).",
+      "query": "solve(N)"
+    }
+  },
+  {
+    "id": "multistep_07",
+    "category": "multistep",
+    "difficulty": "hard",
+    "description": "Traveling salesman on 4 cities, minimum cost",
+    "question": "Four cities A, B, C, D have symmetric pairwise distances: A-B=10, A-C=15, A-D=20, B-C=35, B-D=25, C-D=30. A salesperson starts at A, visits each other city exactly once, and returns to A. What is the minimum total travel distance?",
+    "expected_answer": 80,
+    "answer_type": "number",
+    "prolog_hint": {
+      "code": "dist(a, b, 10). dist(a, c, 15). dist(a, d, 20).\ndist(b, c, 35). dist(b, d, 25). dist(c, d, 30).\nd(X, Y, D) :- dist(X, Y, D).\nd(X, Y, D) :- dist(Y, X, D).\ntour(Cost) :-\n  permutation([b, c, d], [X, Y, Z]),\n  d(a, X, D1),\n  d(X, Y, D2),\n  d(Y, Z, D3),\n  d(Z, a, D4),\n  Cost is D1 + D2 + D3 + D4.\nbest(Min) :- findall(C, tour(C), Cs), min_list(Cs, Min).",
+      "query": "best(Min)"
     }
   }
 ]

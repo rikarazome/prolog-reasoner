@@ -177,6 +177,31 @@ All settings via environment variables (prefix `PROLOG_REASONER_`):
 
 `benchmarks/` contains 10 logic problems across 5 categories (deduction, transitive, constraint, contradiction, multi-step) to compare LLM-only reasoning vs LLM+Prolog reasoning. The benchmark exercises the **library** path (translator + executor), since it requires the NL→Prolog step.
 
+### Results
+
+Measured on `anthropic/claude-sonnet-4-6`, 3 consecutive runs (30 total trials):
+
+| Pipeline | Accuracy | Avg latency |
+|----------|----------|-------------|
+| LLM-only | 24/30 (80.0%) | ~1.5s |
+| **LLM + Prolog** | **29/30 (96.7%)** | ~3.8s |
+
+Per-category breakdown (LLM+Prolog, cumulative over 3 runs):
+
+| Category | Pass rate |
+|----------|-----------|
+| deduction | 5/6 |
+| transitive | 6/6 |
+| constraint | 6/6 |
+| contradiction | 3/3 |
+| multi-step | 9/9 |
+
+All 30 executions completed without Prolog syntax errors. The single failure was a semantic query-polarity mismatch produced by the LLM (it chose a counterexample-exists query whose truth value is the opposite of the user's yes/no question) — the Prolog engine itself answered correctly.
+
+LLM-only fails on cases requiring multi-step constraint satisfaction (einstein-style puzzles) and knight/knave logic; routing through Prolog recovers both reliably.
+
+### Running it yourself
+
 ```bash
 docker run --rm -e PROLOG_REASONER_LLM_API_KEY=sk-... \
     prolog-reasoner-dev python benchmarks/run_benchmark.py

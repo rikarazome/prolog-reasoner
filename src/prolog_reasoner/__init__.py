@@ -1,5 +1,12 @@
 """prolog-reasoner: LLM-powered logical reasoning with Prolog."""
 
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("prolog-reasoner")
+except PackageNotFoundError:
+    __version__ = "unknown"
+
 from prolog_reasoner.errors import (
     BackendError,
     ConfigurationError,
@@ -17,6 +24,7 @@ from prolog_reasoner.models import (
 from prolog_reasoner.reasoner import PrologReasoner
 
 __all__ = [
+    "__version__",
     "PrologReasoner",
     "TranslationRequest",
     "TranslationResult",

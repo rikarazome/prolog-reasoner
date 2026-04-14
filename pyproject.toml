@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "haseg" },
+    { name = "rikarazome", email = "rikimarh@gmail.com" },
 ]
 keywords = ["prolog", "llm", "logic", "reasoning", "mcp", "neuro-symbolic"]
 classifiers = [
@@ -46,9 +46,9 @@ dev = [
 prolog-reasoner = "prolog_reasoner.server:main"
 
 [project.urls]
-Homepage = "https://github.com/haseg/prolog-reasoner"
-Repository = "https://github.com/haseg/prolog-reasoner"
-Issues = "https://github.com/haseg/prolog-reasoner/issues"
+Homepage = "https://github.com/rikarazome/prolog-reasoner"
+Repository = "https://github.com/rikarazome/prolog-reasoner"
+Issues = "https://github.com/rikarazome/prolog-reasoner/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/prolog_reasoner"]

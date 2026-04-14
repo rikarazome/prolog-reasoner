@@ -86,6 +86,23 @@ class TestExecute:
         assert result.success is True
         assert "こんにちは" in result.output
 
+    @pytest.mark.asyncio
+    async def test_compound_goal_query(self, executor):
+        """Query containing top-level comma must not be parsed as write_canonical/2.
+
+        Regression: when __QUERY__ substitutes a goal like `human(X), mortal(X)`
+        into write_canonical(__QUERY__), SWI-Prolog reads it as a 2-arg call
+        expecting a stream alias as the first argument and raises a domain
+        error. The wrapper must wrap the goal in parens to preserve it as a
+        single comma-term argument.
+        """
+        code = "human(socrates). human(plato). mortal(X) :- human(X)."
+        result = await executor.execute(code, "human(X), mortal(X)")
+        assert result.success is True
+        assert "socrates" in result.output
+        assert "plato" in result.output
+        assert result.metadata["result_count"] == 2
+
 
 class TestValidateSyntax:
     @pytest.mark.asyncio

@@ -28,7 +28,7 @@ _QUERY_WRAPPER_TEMPLATE = """\
      -> (write('__TRUNCATED__'), nl, !)
      ;  (__PR_N1 is __PR_N + 1,
          nb_setval('__pr_count', __PR_N1),
-         write_canonical(__QUERY__), nl,
+         write_canonical((__QUERY__)), nl,
          fail)
      )
    ; true

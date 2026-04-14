@@ -83,96 +83,97 @@ class PrologExecutor:
             mode="w", suffix=".pl", encoding="utf-8", delete=False,
         )
         try:
-            tmp.write(prolog_input)
-            tmp.close()
+            try:
+                tmp.write(prolog_input)
+                tmp.close()
+                proc = await self._start_swipl(tmp.name)
+            except Exception as exc:
+                raise BackendError(
+                    f"Failed to start SWI-Prolog: {exc}",
+                    error_code="BACKEND_001",
+                ) from exc
 
-            proc = await self._start_swipl(tmp.name)
-        except Exception as exc:
-            os.unlink(tmp.name)
-            raise BackendError(
-                f"Failed to start SWI-Prolog: {exc}",
-                error_code="BACKEND_001",
-            ) from exc
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                elapsed = time.monotonic() - start_time
+                logger.warning(f"Prolog execution timed out after {elapsed:.1f}s")
+                return ExecutionResult(
+                    success=False,
+                    output="",
+                    query=query,
+                    error=f"Prolog execution timed out after {timeout}s",
+                    metadata={"error_code": "EXEC_002"},
+                )
 
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=timeout,
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
+            stdout_text = stdout.decode("utf-8")
+            stderr_text = stderr.decode("utf-8")
+
+            has_prolog_error = any(
+                "ERROR:" in line for line in stderr_text.splitlines()
             )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            os.unlink(tmp.name)
-            elapsed = time.monotonic() - start_time
-            logger.warning(f"Prolog execution timed out after {elapsed:.1f}s")
+
+            if proc.returncode != 0:
+                logger.error(
+                    f"SWI-Prolog exited with code {proc.returncode}: "
+                    f"{stderr_text[:200]}"
+                )
+                return ExecutionResult(
+                    success=False,
+                    output="",
+                    query=query,
+                    error=stderr_text or f"SWI-Prolog exited with code {proc.returncode}",
+                    metadata={
+                        "error_code": "EXEC_003",
+                        "execution_time_ms": elapsed_ms,
+                    },
+                )
+
+            if has_prolog_error:
+                return ExecutionResult(
+                    success=False,
+                    output=stdout_text,
+                    query=query,
+                    error=stderr_text,
+                    metadata={
+                        "error_code": "EXEC_001",
+                        "execution_time_ms": elapsed_ms,
+                    },
+                )
+
+            truncated = stdout_text.rstrip().endswith(_TRUNCATED_MARKER)
+            result_count = self._count_results(stdout_text)
+
+            warnings = [
+                line for line in stderr_text.splitlines() if line.strip()
+            ] if stderr_text.strip() else []
+
+            metadata: dict = {
+                "backend": "subprocess",
+                "execution_time_ms": elapsed_ms,
+                "result_count": result_count,
+                "truncated": truncated,
+            }
+            if warnings:
+                metadata["prolog_warnings"] = warnings
+
             return ExecutionResult(
-                success=False,
-                output="",
-                query=query,
-                error=f"Prolog execution timed out after {timeout}s",
-                metadata={"error_code": "EXEC_002"},
-            )
-
-        os.unlink(tmp.name)
-        elapsed_ms = int((time.monotonic() - start_time) * 1000)
-        stdout_text = stdout.decode("utf-8")
-        stderr_text = stderr.decode("utf-8")
-
-        has_prolog_error = any(
-            "ERROR:" in line for line in stderr_text.splitlines()
-        )
-
-        if proc.returncode != 0:
-            logger.error(
-                f"SWI-Prolog exited with code {proc.returncode}: "
-                f"{stderr_text[:200]}"
-            )
-            return ExecutionResult(
-                success=False,
-                output="",
-                query=query,
-                error=stderr_text or f"SWI-Prolog exited with code {proc.returncode}",
-                metadata={
-                    "error_code": "EXEC_003",
-                    "execution_time_ms": elapsed_ms,
-                },
-            )
-
-        if has_prolog_error:
-            return ExecutionResult(
-                success=False,
+                success=True,
                 output=stdout_text,
                 query=query,
-                error=stderr_text,
-                metadata={
-                    "error_code": "EXEC_001",
-                    "execution_time_ms": elapsed_ms,
-                },
+                metadata=metadata,
             )
-
-        # Compute metadata
-        truncated = stdout_text.rstrip().endswith(_TRUNCATED_MARKER)
-        result_count = self._count_results(stdout_text)
-
-        warnings = [
-            line for line in stderr_text.splitlines() if line.strip()
-        ] if stderr_text.strip() else []
-
-        metadata: dict = {
-            "backend": "subprocess",
-            "execution_time_ms": elapsed_ms,
-            "result_count": result_count,
-            "truncated": truncated,
-        }
-        if warnings:
-            metadata["prolog_warnings"] = warnings
-
-        return ExecutionResult(
-            success=True,
-            output=stdout_text,
-            query=query,
-            metadata=metadata,
-        )
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
 
     async def validate_syntax(self, prolog_code: str) -> str | None:
         """Check Prolog code for syntax errors via SWI-Prolog consult.
@@ -189,37 +190,39 @@ class PrologExecutor:
             mode="w", suffix=".pl", encoding="utf-8", delete=False,
         )
         try:
-            tmp.write(code)
-            tmp.close()
+            try:
+                tmp.write(code)
+                tmp.close()
+                proc = await self._start_swipl(tmp.name)
+            except Exception as exc:
+                raise BackendError(
+                    f"Failed to start SWI-Prolog: {exc}",
+                    error_code="BACKEND_001",
+                ) from exc
 
-            proc = await self._start_swipl(tmp.name)
-        except Exception as exc:
-            os.unlink(tmp.name)
-            raise BackendError(
-                f"Failed to start SWI-Prolog: {exc}",
-                error_code="BACKEND_001",
-            ) from exc
+            try:
+                _, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=self._default_timeout,
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return f"Syntax check timed out after {self._default_timeout}s"
 
-        try:
-            _, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=self._default_timeout,
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            os.unlink(tmp.name)
-            return f"Syntax check timed out after {self._default_timeout}s"
+            stderr_text = stderr.decode("utf-8")
+            error_lines = [
+                line for line in stderr_text.splitlines() if "ERROR:" in line
+            ]
+            if error_lines:
+                return "\n".join(error_lines)
 
-        os.unlink(tmp.name)
-        stderr_text = stderr.decode("utf-8")
-        error_lines = [
-            line for line in stderr_text.splitlines() if "ERROR:" in line
-        ]
-        if error_lines:
-            return "\n".join(error_lines)
-
-        return None
+            return None
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
 
     async def _start_swipl(self, script_path: str) -> asyncio.subprocess.Process:
         """Start a SWI-Prolog subprocess loading a script file."""

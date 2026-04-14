@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lazy initialization in `server.py` so `from prolog_reasoner.server import mcp` succeeds even without SWI-Prolog at import time
 - Comprehensive test suite (81 tests)
 
+### Reliability
+- Guaranteed tempfile cleanup via `try/finally` in `PrologExecutor.execute()` and `validate_syntax()` — no leak on unexpected exceptions
+
 ### Security
 - API key redaction in all log output
 - Input validation via Pydantic models

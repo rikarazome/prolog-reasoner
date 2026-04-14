@@ -1,5 +1,10 @@
 # prolog-reasoner
 
+[![PyPI version](https://img.shields.io/pypi/v/prolog-reasoner.svg)](https://pypi.org/project/prolog-reasoner/)
+[![Python versions](https://img.shields.io/pypi/pyversions/prolog-reasoner.svg)](https://pypi.org/project/prolog-reasoner/)
+[![CI](https://github.com/rikarazome/prolog-reasoner/actions/workflows/test.yml/badge.svg)](https://github.com/rikarazome/prolog-reasoner/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 SWI-Prolog as a "logic calculator" for LLMs — available as an MCP server and a Python library.
 
 LLMs excel at natural language but struggle with formal logic. Prolog excels at logical reasoning but can't process natural language. **prolog-reasoner** bridges this gap by exposing SWI-Prolog execution to LLMs through two complementary surfaces:

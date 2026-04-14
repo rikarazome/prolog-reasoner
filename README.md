@@ -161,7 +161,7 @@ All settings via environment variables (prefix `PROLOG_REASONER_`):
 |----------|---------|--------------|
 | `LLM_PROVIDER` | `openai` | library (`openai` or `anthropic`) |
 | `LLM_API_KEY` | `""` | library only — leave unset for MCP |
-| `LLM_MODEL` | `gpt-4o` | library |
+| `LLM_MODEL` | `gpt-5.4-mini` | library |
 | `LLM_TEMPERATURE` | `0.0` | library |
 | `LLM_TIMEOUT_SECONDS` | `30.0` | library |
 | `SWIPL_PATH` | `swipl` | both |

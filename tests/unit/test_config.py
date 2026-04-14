@@ -10,7 +10,7 @@ class TestSettings:
     def test_defaults(self):
         s = Settings(llm_api_key="test-key")
         assert s.llm_provider == "openai"
-        assert s.llm_model == "gpt-4o"
+        assert s.llm_model == "gpt-5.4-mini"
         assert s.llm_temperature == 0.0
         assert s.swipl_path == "swipl"
         assert s.execution_timeout_seconds == 10.0

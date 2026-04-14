@@ -8,7 +8,7 @@ services:
     environment:
       - PROLOG_REASONER_LLM_PROVIDER=openai
       - PROLOG_REASONER_LLM_API_KEY=${PROLOG_REASONER_LLM_API_KEY:-dummy}
-      - PROLOG_REASONER_LLM_MODEL=${PROLOG_REASONER_LLM_MODEL:-gpt-4}
+      - PROLOG_REASONER_LLM_MODEL=${PROLOG_REASONER_LLM_MODEL:-gpt-5.4-mini}
     command: ["pytest", "tests/", "-v"]
 
   test:
@@ -18,7 +18,7 @@ services:
     environment:
       - PROLOG_REASONER_LLM_PROVIDER=openai
       - PROLOG_REASONER_LLM_API_KEY=${PROLOG_REASONER_LLM_API_KEY:-dummy}
-      - PROLOG_REASONER_LLM_MODEL=${PROLOG_REASONER_LLM_MODEL:-gpt-4}
+      - PROLOG_REASONER_LLM_MODEL=${PROLOG_REASONER_LLM_MODEL:-gpt-5.4-mini}
     command: ["pytest", "tests/", "-v"]
 
   server:

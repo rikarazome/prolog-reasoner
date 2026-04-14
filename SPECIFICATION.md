@@ -644,7 +644,7 @@ class Settings(BaseSettings):
     # LLM（ライブラリ利用時のみ必要。MCPサーバーは使わない）
     llm_provider: str = "openai"           # "openai" | "anthropic"
     llm_api_key: str = ""                  # v13以降オプション。空文字の場合LLMClientは使えない
-    llm_model: str = "gpt-4o"
+    llm_model: str = "gpt-5.4-mini"
     llm_temperature: float = 0.0
     llm_timeout_seconds: float = 30.0     # LLM API呼び出しのタイムアウト
 

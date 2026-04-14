@@ -4,8 +4,7 @@ Demonstrates the classic Socrates syllogism:
   All humans are mortal. Socrates is human. Therefore, Socrates is mortal.
 
 Usage:
-    docker run --rm -e PROLOG_REASONER_LLM_API_KEY=dummy prolog-reasoner-dev \
-        python examples/socrates.py
+    docker run --rm prolog-reasoner-dev python examples/socrates.py
 """
 
 import asyncio
@@ -15,7 +14,7 @@ from prolog_reasoner.executor import PrologExecutor
 
 
 async def main():
-    settings = Settings(llm_api_key="dummy")
+    settings = Settings()
     executor = PrologExecutor(settings)
 
     prolog_code = """

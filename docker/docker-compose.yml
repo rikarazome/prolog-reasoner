@@ -25,9 +25,5 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    environment:
-      - PROLOG_REASONER_LLM_PROVIDER=${PROLOG_REASONER_LLM_PROVIDER}
-      - PROLOG_REASONER_LLM_API_KEY=${PROLOG_REASONER_LLM_API_KEY}
-      - PROLOG_REASONER_LLM_MODEL=${PROLOG_REASONER_LLM_MODEL}
     stdin_open: true
     command: ["prolog-reasoner"]

@@ -5,8 +5,7 @@ Demonstrates scheduling 3 tasks into 3 time slots with constraints:
   - Task A before Task B
 
 Usage:
-    docker run --rm -e PROLOG_REASONER_LLM_API_KEY=dummy prolog-reasoner-dev \
-        python examples/constraint.py
+    docker run --rm prolog-reasoner-dev python examples/constraint.py
 """
 
 import asyncio
@@ -16,7 +15,7 @@ from prolog_reasoner.executor import PrologExecutor
 
 
 async def main():
-    settings = Settings(llm_api_key="dummy")
+    settings = Settings()
     executor = PrologExecutor(settings)
 
     prolog_code = """

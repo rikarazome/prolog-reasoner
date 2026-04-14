@@ -4,8 +4,7 @@ Demonstrates multi-hop ancestor reasoning:
   parent(tom, bob), parent(bob, ann) => ancestor(tom, ann)
 
 Usage:
-    docker run --rm -e PROLOG_REASONER_LLM_API_KEY=dummy prolog-reasoner-dev \
-        python examples/family.py
+    docker run --rm prolog-reasoner-dev python examples/family.py
 """
 
 import asyncio
@@ -15,7 +14,7 @@ from prolog_reasoner.executor import PrologExecutor
 
 
 async def main():
-    settings = Settings(llm_api_key="dummy")
+    settings = Settings()
     executor = PrologExecutor(settings)
 
     prolog_code = """

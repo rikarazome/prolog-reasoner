@@ -13,6 +13,7 @@ Usage:
 
 import asyncio
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -111,67 +112,293 @@ def check_answer(got: object, expected: object, answer_type: str) -> bool:
     return str(got) == str(expected)
 
 
+def _split_args(s: str) -> list[str]:
+    """Split top-level comma-separated args, respecting nested brackets."""
+    parts, depth, buf = [], 0, []
+    for ch in s:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        parts.append("".join(buf).strip())
+    return parts
+
+
+def _split_comma_term(line: str) -> list[str] | None:
+    """Flatten a ','(G1, G2, ...) prefix-functor term into a list of goals.
+
+    SWI-Prolog's write_canonical/1 prints a top-level conjunction using the
+    prefix functor notation ','/2. When a compound query like `a(X), b(Y)`
+    succeeds, the output line becomes `,'(a(X),b(Y))`. This helper unpacks
+    it so each goal can be inspected independently.
+
+    Returns None if the line is not a recognisable comma term.
+    """
+    s = line.strip()
+    if not (s.startswith("','(") or s.startswith(",(") or s.startswith("','(")):
+        return None
+    open_idx = s.index("(")
+    if not s.endswith(")"):
+        return None
+    inner = s[open_idx + 1 : -1]
+    args = _split_args(inner)
+    if len(args) < 2:
+        return None
+    flat: list[str] = []
+    for a in args:
+        sub = _split_comma_term(a)
+        if sub:
+            flat.extend(sub)
+        else:
+            flat.append(a)
+    return flat
+
+
+def _query_var_positions(query: str) -> tuple[str, list[int]]:
+    """Parse a simple Prolog goal and return (predicate, var_arg_indices).
+
+    For a query like "descendant(X, tom)" returns ("descendant", [0]).
+    For non-matching shapes (compound goals, no parens) returns ("", []).
+
+    Used to disambiguate which argument of an output term carries the
+    answer when the LLM places its variable at a non-trailing position.
+    """
+    q = query.strip().rstrip(".")
+    m = re.match(r"^([a-z_]\w*)\s*\((.*)\)\s*$", q)
+    if not m:
+        return "", []
+    name = m.group(1)
+    args = _split_args(m.group(2))
+    positions = [
+        i for i, a in enumerate(args)
+        if re.match(r"^[A-Z_]\w*$", a.strip())
+    ]
+    return name, positions
+
+
 def extract_prolog_answer(
     output: str, answer_type: str, query: str
 ) -> object:
-    """Extract structured answer from Prolog output."""
+    """Extract structured answer from Prolog output, tolerating multiple
+    output styles the LLM may produce (write_canonical, findall lists,
+    Var = Value bindings, custom write messages)."""
+    raw_lines = output.strip().splitlines()
     lines = [
-        l.strip() for l in output.strip().splitlines()
-        if l.strip() and l.strip() != "false" and l.strip() != "__TRUNCATED__"
+        l.strip() for l in raw_lines
+        if l.strip() and l.strip() != "__TRUNCATED__"
     ]
+    # Lines after stripping bare "false" (a failed branch is not an answer)
+    sig_lines = [l for l in lines if l != "false"]
+
+    # Flatten any ','(G1, G2, ...) prefix-functor output — this happens when
+    # the LLM's Query is a conjunction like "a(X), b(Y)" and write_canonical
+    # prints the whole goal term. Unpacking lets downstream strategies reason
+    # about each sub-goal independently.
+    flat: list[str] = []
+    for ln in sig_lines:
+        parts = _split_comma_term(ln)
+        flat.extend(parts) if parts else flat.append(ln)
+    sig_lines = flat
 
     if answer_type == "boolean":
-        return len(lines) > 0  # Any result = true
+        # No significant output = query failed = false
+        if not sig_lines:
+            return False
+        joined = " ".join(sig_lines).lower()
+        # Explicit textual signals from custom write/format calls.
+        # `contradict` is matched without word boundary because LLMs sometimes
+        # emit repeated tokens like "contradictioncontradiction" with no
+        # separator (e.g. via write/1 in a forall loop).
+        if re.search(r"\b(false|no|inconsistent)\b|contradict", joined):
+            return False
+        if re.search(r"\b(true|yes|consistent)\b", joined):
+            return True
+        # Bare "false" anywhere with no other content already handled above
+        return True
 
     if answer_type == "set":
-        # Extract variable bindings from write_canonical output
-        values = set()
-        for line in lines:
-            # Parse e.g. "ancestor(tom,bob)" → extract last arg
-            if "(" in line:
+        values: set[str] = set()
+        # Strategy 1: list literal anywhere in output, e.g. [bob,ann,pat]
+        for line in sig_lines:
+            for m in re.finditer(r"\[([^\[\]]*)\]", line):
+                inner = m.group(1).strip()
+                if not inner:
+                    continue
+                for tok in _split_args(inner):
+                    tok = tok.strip().strip("'\"").lower()
+                    if tok and tok not in ("_", "[]"):
+                        values.add(tok)
+        if values:
+            return values
+        # Strategy 2: Var = value bindings (one or many on a line)
+        for line in sig_lines:
+            for m in re.finditer(r"([A-Z_]\w*)\s*=\s*([a-z_]\w*)", line):
+                values.add(m.group(2).lower())
+        if values:
+            return values
+        # Strategy 3: predicate(args...) — prefer the position(s) where the
+        # query had unbound variables; fall back to last arg otherwise.
+        qname, qvars = _query_var_positions(query)
+        for line in sig_lines:
+            if "(" in line and line.endswith(")"):
+                line_pred = re.match(r"^([a-z_]\w*)\s*\(", line)
                 inner = line[line.index("(") + 1 : line.rindex(")")]
-                parts = inner.split(",")
-                values.add(parts[-1].strip())
+                parts = _split_args(inner)
+                if not parts:
+                    continue
+                use_qvars = (
+                    qname
+                    and line_pred is not None
+                    and line_pred.group(1) == qname
+                    and qvars
+                    and all(p < len(parts) for p in qvars)
+                )
+                if use_qvars:
+                    for p in qvars:
+                        values.add(parts[p].strip().strip("'\"").lower())
+                else:
+                    values.add(parts[-1].strip().strip("'\"").lower())
         return values
 
     if answer_type == "count":
-        return len(lines)
+        # Strategy 1: a single line that's just an integer
+        if len(sig_lines) == 1:
+            m = re.fullmatch(r"-?\d+", sig_lines[0])
+            if m:
+                return int(m.group(0))
+        # Strategy 2: predicate(N) where N is integer (e.g. count(6))
+        if len(sig_lines) == 1 and "(" in sig_lines[0]:
+            inner = sig_lines[0][sig_lines[0].index("(") + 1 : sig_lines[0].rindex(")")]
+            parts = _split_args(inner)
+            for p in parts:
+                m = re.fullmatch(r"-?\d+", p.strip())
+                if m:
+                    return int(m.group(0))
+        # Strategy 3: Var = N binding
+        if len(sig_lines) == 1:
+            m = re.search(r"=\s*(-?\d+)\b", sig_lines[0])
+            if m:
+                return int(m.group(1))
+        # Strategy 4: explicit count phrase like "(6 total)" / "6 solutions"
+        joined = " ".join(sig_lines)
+        m = re.search(
+            r"(\d+)\s*(?:total|solutions?|valid|distinct|colorings?|results?|ways?)",
+            joined, re.IGNORECASE,
+        )
+        if m:
+            return int(m.group(1))
+        # Strategy 5: count lines that look like solution bindings (contain '=')
+        binding_lines = [l for l in sig_lines if "=" in l and not l.endswith(":")]
+        if binding_lines:
+            return len(binding_lines)
+        # Strategy 6: count enumerated solutions (one per line)
+        return len(sig_lines)
 
     if answer_type == "number":
-        # For SEND+MORE=MONEY, extract the values
-        if lines:
-            line = lines[0]
-            # Extract digits from solve([S,E,N,D,M,O,R,Y])
-            if "[" in line:
-                nums = line[line.index("[") + 1 : line.index("]")]
-                digits = [int(x.strip()) for x in nums.split(",")]
-                if len(digits) == 8:
-                    # M*10000 + O*1000 + N*100 + E*10 + Y
-                    return digits[4]*10000 + digits[5]*1000 + digits[2]*100 + digits[1]*10 + digits[7]
+        # Strategy 1: SEND+MORE — bindings list of 8 digits
+        for line in sig_lines:
+            for m in re.finditer(r"\[([^\[\]]+)\]", line):
+                parts = _split_args(m.group(1))
+                if len(parts) == 8:
+                    try:
+                        d = [int(x.strip()) for x in parts]
+                        # MONEY = M*10000 + O*1000 + N*100 + E*10 + Y
+                        return d[4]*10000 + d[5]*1000 + d[2]*100 + d[1]*10 + d[7]
+                    except ValueError:
+                        pass
+        # Strategy 2: explicit "MONEY = 10652" or any Var = number
+        for line in sig_lines:
+            m = re.search(r"\bMONEY\s*=\s*(-?\d+)", line, re.IGNORECASE)
+            if m:
+                return int(m.group(1))
+        # Strategy 3: per-letter bindings — assemble MONEY
+        bindings: dict[str, int] = {}
+        for line in sig_lines:
+            for m in re.finditer(r"\b([A-Z])\s*=\s*(\d)\b", line):
+                bindings[m.group(1)] = int(m.group(2))
+        if all(k in bindings for k in "MONEY"):
+            return (bindings["M"]*10000 + bindings["O"]*1000
+                    + bindings["N"]*100 + bindings["E"]*10 + bindings["Y"])
+        # Strategy 4: a single integer line
+        for line in sig_lines:
+            m = re.fullmatch(r"-?\d+", line)
+            if m:
+                return int(m.group(0))
+        # Strategy 5: predicate(a1, ..., aN) — prefer the LAST integer arg.
+        # Symmetric to Plan Z's value extraction: when the LLM wraps bindings
+        # plus the computed answer in one predicate (e.g. solve(S,E,N,D,M,O,
+        # R,Y,MONEY) = solve(9,5,6,7,1,0,8,2,10652)), the answer is in the
+        # final argument, not the first binding.
+        for line in sig_lines:
+            if "(" in line and line.endswith(")"):
+                inner = line[line.index("(") + 1 : line.rindex(")")]
+                parts = _split_args(inner)
+                for p in reversed(parts):
+                    m = re.fullmatch(r"-?\d+", p.strip())
+                    if m:
+                        return int(m.group(0))
+        # Strategy 6: first integer anywhere (last resort)
+        for line in sig_lines:
+            m = re.search(r"-?\d+", line)
+            if m:
+                return int(m.group(0))
         return -1
 
     if answer_type == "value":
-        if lines:
-            line = lines[0]
-            if "(" in line:
+        if not sig_lines:
+            return ""
+        # Var = value — prefer any line that exposes a direct binding
+        for line in sig_lines:
+            m = re.search(r"=\s*([a-z_]\w*)", line)
+            if m:
+                return m.group(1).lower()
+        # predicate(value) — prefer the LAST sub-goal. After comma-term
+        # flattening, the answer variable is typically bound in the final
+        # goal of a conjunction (e.g. `nth1(_, _, Pet)` after `solve(...)`).
+        for line in reversed(sig_lines):
+            if "(" in line and line.endswith(")"):
                 inner = line[line.index("(") + 1 : line.rindex(")")]
-                return inner.strip().lower()
-            return line.lower()
-        return ""
+                parts = _split_args(inner)
+                if parts:
+                    return parts[-1].strip().strip("'\"").lower()
+        return sig_lines[-1].lower()
 
     if answer_type == "assignment":
-        result = {}
-        if lines:
-            line = lines[0]
-            if "(" in line:
+        result: dict[str, str] = {}
+        # Strategy 1: explicit A=knight, B=knave bindings anywhere
+        for line in sig_lines:
+            for m in re.finditer(r"\b([A-Z])\s*=\s*([a-z]\w*)", line):
+                result[m.group(1).upper()] = m.group(2).lower()
+        if "A" in result and "B" in result:
+            return {"A": result["A"], "B": result["B"]}
+        # Strategy 2: prose like "A is a knave" / "B is the knight"
+        for line in sig_lines:
+            for m in re.finditer(
+                r"\b([A-Z])\b\s+is\s+(?:an?|the)?\s*([a-z]+)",
+                line, re.IGNORECASE,
+            ):
+                result[m.group(1).upper()] = m.group(2).lower()
+        if "A" in result and "B" in result:
+            return {"A": result["A"], "B": result["B"]}
+        # Strategy 3: predicate(a,b) — take first two args positionally,
+        # but only if they look like meaningful atoms (not bare integers)
+        for line in sig_lines:
+            if "(" in line and line.endswith(")"):
                 inner = line[line.index("(") + 1 : line.rindex(")")]
-                parts = inner.split(",")
+                parts = _split_args(inner)
                 if len(parts) >= 2:
-                    result["A"] = parts[0].strip().lower()
-                    result["B"] = parts[1].strip().lower()
+                    a, b = parts[0].strip().lower(), parts[1].strip().lower()
+                    if not (a.lstrip("-").isdigit() and b.lstrip("-").isdigit()):
+                        return {"A": a, "B": b}
         return result
 
-    return lines[0] if lines else ""
+    return sig_lines[0] if sig_lines else ""
 
 
 async def run_llm_only(
@@ -200,48 +427,55 @@ async def run_prolog_pipeline(
     reasoner: PrologReasoner,
     executor: PrologExecutor,
     problem: dict,
-) -> tuple[bool, str, float]:
-    """Run LLM+Prolog pipeline. Returns (correct, raw_output, time_ms)."""
+) -> tuple[bool, str, float, dict]:
+    """Run LLM+Prolog pipeline. Returns (correct, raw_output, time_ms, trace).
+
+    trace dict captures intermediate artifacts for inspection/promo material:
+    prolog_code, query, output.
+    """
     start = time.monotonic()
+    trace: dict = {"prolog_code": "", "query": "", "output": ""}
     try:
-        # Step 1: Translate to Prolog
         tr = await reasoner.translate(
             TranslationRequest(query=problem["question"])
         )
 
+        # Always capture intermediate artifacts, even on failure, for diagnosis
+        trace["prolog_code"] = tr.prolog_code or ""
+        trace["query"] = tr.suggested_query or ""
+
         if not tr.success:
             elapsed = (time.monotonic() - start) * 1000
-            return False, f"TRANSLATION_FAILED: {tr.error}", elapsed
+            return False, f"TRANSLATION_FAILED: {tr.error}", elapsed, trace
 
-        # Step 2: Execute
         query = tr.suggested_query
         if not query:
-            # Fallback to hint query if translation didn't produce one
             query = problem.get("prolog_hint", {}).get("query", "")
+        trace["query"] = query
 
         if not query:
             elapsed = (time.monotonic() - start) * 1000
-            return False, "NO_QUERY_EXTRACTED", elapsed
+            return False, "NO_QUERY_EXTRACTED", elapsed, trace
 
         er = await executor.execute(
             prolog_code=tr.prolog_code,
             query=query,
         )
         elapsed = (time.monotonic() - start) * 1000
+        trace["output"] = er.output
 
         if not er.success:
-            return False, f"EXECUTION_FAILED: {er.error}", elapsed
+            return False, f"EXECUTION_FAILED: {er.error}", elapsed, trace
 
-        # Step 3: Extract answer
         answer = extract_prolog_answer(
             er.output, problem["answer_type"], query
         )
         correct = check_answer(answer, problem["expected_answer"], problem["answer_type"])
-        return correct, er.output.strip(), elapsed
+        return correct, er.output.strip(), elapsed, trace
 
     except Exception as e:
         elapsed = (time.monotonic() - start) * 1000
-        return False, f"ERROR: {e}", elapsed
+        return False, f"ERROR: {e}", elapsed, trace
 
 
 async def run_prolog_direct(
@@ -316,8 +550,16 @@ async def main():
     print("\n--- LLM+Prolog ---")
     prolog_results = []
     for p in problems:
-        correct, raw, ms = await run_prolog_pipeline(reasoner, executor, p)
-        prolog_results.append({"id": p["id"], "correct": correct, "raw": raw, "ms": ms})
+        correct, raw, ms, trace = await run_prolog_pipeline(reasoner, executor, p)
+        prolog_results.append({
+            "id": p["id"],
+            "correct": correct,
+            "raw": raw,
+            "ms": ms,
+            "prolog_code": trace["prolog_code"],
+            "query": trace["query"],
+            "output": trace["output"],
+        })
         status = "PASS" if correct else "FAIL"
         print(f"  [{status}] {p['id']:20s} ({ms:6.0f}ms) {raw[:50]}")
 

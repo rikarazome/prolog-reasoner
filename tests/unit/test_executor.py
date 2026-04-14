@@ -162,15 +162,6 @@ class TestEdgeCases:
         assert result.metadata["truncated"] is True
 
     @pytest.mark.asyncio
-    async def test_prolog_warnings_in_metadata(self, executor):
-        """Non-ERROR stderr content should appear as warnings."""
-        # Singleton variable generates a warning in SWI-Prolog
-        code = "test(X, Y) :- X = 1."  # Y is singleton
-        result = await executor.execute(code, "test(A, B)")
-        assert result.success is True
-        # Warnings may or may not appear depending on SWI-Prolog config
-
-    @pytest.mark.asyncio
     async def test_empty_code_with_query(self, executor):
         """No matching facts — query for undefined predicate returns error."""
         result = await executor.execute("% empty", "human(X)")

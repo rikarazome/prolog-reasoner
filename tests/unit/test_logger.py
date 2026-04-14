@@ -6,30 +6,22 @@ from prolog_reasoner.logger import SecureLogger, setup_logging
 
 
 class TestSecureLogger:
-    def test_redact_openai_key(self):
+    def test_redact_openai_and_anthropic_keys(self):
+        """Both OpenAI (sk-...) and Anthropic (sk-ant-...) keys are redacted."""
         logger = SecureLogger("test")
-        msg = "Error with key sk-abc123def456ghi789jkl012mno"
+        msg = (
+            "openai=sk-abc123def456ghi789jkl012mno "
+            "anthropic=sk-ant-api03-abcdefghijklmnopqrstuvwx"
+        )
         redacted = logger._redact(msg)
         assert "sk-abc123" not in redacted
-        assert "[REDACTED]" in redacted
-
-    def test_redact_anthropic_key(self):
-        logger = SecureLogger("test")
-        msg = "Auth failed: sk-ant-api03-abcdefghijklmnopqrstuvwx"
-        redacted = logger._redact(msg)
-        assert "sk-ant" not in redacted
-        assert "[REDACTED]" in redacted
+        assert "sk-ant-api03" not in redacted
+        assert redacted.count("[REDACTED]") == 2
 
     def test_no_redact_normal_text(self):
         logger = SecureLogger("test")
         msg = "Prolog execution completed in 42ms"
         assert logger._redact(msg) == msg
-
-    def test_redact_multiple_keys(self):
-        logger = SecureLogger("test")
-        msg = "key1=sk-aaaaaaaaaaaaaaaaaaaaaa key2=sk-bbbbbbbbbbbbbbbbbbbbbb"
-        redacted = logger._redact(msg)
-        assert redacted.count("[REDACTED]") == 2
 
     def test_short_sk_prefix_not_redacted(self):
         """sk- followed by < 20 chars should NOT be redacted."""

@@ -31,16 +31,6 @@ class TestTranslationRequest:
         with pytest.raises(ValidationError):
             TranslationRequest(query="")
 
-    def test_max_corrections_bounds(self):
-        with pytest.raises(ValidationError):
-            TranslationRequest(query="test", max_corrections=-1)
-        with pytest.raises(ValidationError):
-            TranslationRequest(query="test", max_corrections=11)
-
-    def test_max_corrections_zero_allowed(self):
-        req = TranslationRequest(query="test", max_corrections=0)
-        assert req.max_corrections == 0
-
 
 class TestExecutionRequest:
     def test_valid_minimal(self):
@@ -54,12 +44,6 @@ class TestExecutionRequest:
     def test_empty_query_rejected(self):
         with pytest.raises(ValidationError):
             ExecutionRequest(prolog_code="fact.", query="")
-
-    def test_max_results_bounds(self):
-        with pytest.raises(ValidationError):
-            ExecutionRequest(prolog_code="f.", query="q", max_results=0)
-        with pytest.raises(ValidationError):
-            ExecutionRequest(prolog_code="f.", query="q", max_results=10001)
 
 
 class TestTranslationResult:

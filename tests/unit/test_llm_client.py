@@ -1,8 +1,10 @@
 """Unit tests for LLMClient.
 
 Tests error classification, SDK creation, and provider validation.
-Does NOT call actual LLM APIs.
+Does NOT call actual LLM APIs — all network paths are mocked.
 """
+
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -39,29 +41,61 @@ class TestClientCreation:
 
 
 class TestErrorClassification:
-    @pytest.mark.asyncio
-    async def test_auth_error_openai(self):
-        """Invalid API key should raise LLM_002."""
-        client = LLMClient("openai", "sk-invalid-key-for-test", "gpt-4o")
-        with pytest.raises(LLMError) as exc_info:
-            await client.complete("system", "user", temperature=0.0)
-        # Should be auth error or generic API error
-        assert exc_info.value.error_code in ("LLM_001", "LLM_002")
+    """Classification logic in complete(): auth / rate-limit / generic."""
 
     @pytest.mark.asyncio
-    async def test_auth_error_anthropic(self):
-        """Invalid API key should raise LLM_002."""
-        client = LLMClient("anthropic", "sk-ant-invalid", "claude-sonnet-4-20250514")
+    async def test_auth_error_classified_as_llm_002(self):
+        client = LLMClient("openai", "key", "gpt-4o")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=Exception("Invalid API key provided")
+        )
         with pytest.raises(LLMError) as exc_info:
-            await client.complete("system", "user", temperature=0.0)
-        assert exc_info.value.error_code in ("LLM_001", "LLM_002")
+            await client.complete("sys", "user")
+        assert exc_info.value.error_code == "LLM_002"
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_classified_as_llm_003_retryable(self):
+        client = LLMClient("anthropic", "key", "claude-x")
+        client._client.messages.create = AsyncMock(
+            side_effect=Exception("Rate limit exceeded, retry later")
+        )
+        with pytest.raises(LLMError) as exc_info:
+            await client.complete("sys", "user")
+        assert exc_info.value.error_code == "LLM_003"
+        assert exc_info.value.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_generic_error_classified_as_llm_001(self):
+        client = LLMClient("openai", "key", "gpt-4o")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=Exception("Internal server error")
+        )
+        with pytest.raises(LLMError) as exc_info:
+            await client.complete("sys", "user")
+        assert exc_info.value.error_code == "LLM_001"
+        assert exc_info.value.retryable is True
 
 
 class TestCompleteTimeout:
     @pytest.mark.asyncio
-    async def test_timeout_override(self):
-        """timeout_seconds parameter should override constructor value."""
-        client = LLMClient("openai", "sk-invalid", "gpt-4o", timeout_seconds=30.0)
-        with pytest.raises(LLMError):
-            # Very short timeout — should fail fast
-            await client.complete("sys", "user", timeout_seconds=0.001)
+    async def test_timeout_override_is_applied(self):
+        """timeout_seconds kwarg must be passed to asyncio.wait_for."""
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
+        )
+
+        async def fake_wait_for(coro, timeout):
+            coro.close()  # prevent "coroutine was never awaited" warning
+            fake_wait_for.captured_timeout = timeout
+            return response
+
+        client = LLMClient("openai", "key", "gpt-4o", timeout_seconds=30.0)
+        client._client.chat.completions.create = AsyncMock(return_value=response)
+
+        with patch("prolog_reasoner.llm_client.asyncio.wait_for", side_effect=fake_wait_for):
+            result = await client.complete("sys", "user", timeout_seconds=5.0)
+
+        assert result == "ok"
+        assert fake_wait_for.captured_timeout == 5.0

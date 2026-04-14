@@ -175,30 +175,30 @@ All settings via environment variables (prefix `PROLOG_REASONER_`):
 
 ## Benchmark
 
-`benchmarks/` contains 10 logic problems across 5 categories (deduction, transitive, constraint, contradiction, multi-step) to compare LLM-only reasoning vs LLM+Prolog reasoning. The benchmark exercises the **library** path (translator + executor), since it requires the NL→Prolog step.
+`benchmarks/` contains 30 logic problems across 5 categories (deduction, transitive, constraint, contradiction, multi-step) to compare LLM-only reasoning vs LLM+Prolog reasoning. The benchmark exercises the **library** path (translator + executor), since it requires the NL→Prolog step.
 
 ### Results
 
-Measured on `anthropic/claude-sonnet-4-6`, 3 consecutive runs (30 total trials):
+Measured on `anthropic/claude-sonnet-4-6`, single run over 30 problems:
 
 | Pipeline | Accuracy | Avg latency |
 |----------|----------|-------------|
-| LLM-only | 24/30 (80.0%) | ~1.5s |
-| **LLM + Prolog** | **29/30 (96.7%)** | ~3.8s |
+| LLM-only | 22/30 (73.3%) | 1.7s |
+| **LLM + Prolog** | **27/30 (90.0%)** | 3.8s |
 
-Per-category breakdown (LLM+Prolog, cumulative over 3 runs):
+Per-category breakdown:
 
-| Category | Pass rate |
-|----------|-----------|
-| deduction | 5/6 |
-| transitive | 6/6 |
-| constraint | 6/6 |
-| contradiction | 3/3 |
-| multi-step | 9/9 |
+| Category | LLM-only | LLM + Prolog |
+|----------|----------|--------------|
+| deduction | 6/6 | 6/6 |
+| transitive | 6/6 | 5/6 |
+| constraint | 3/7 | **6/7** |
+| contradiction | 4/4 | 3/4 |
+| multi-step | 3/7 | **7/7** |
 
-All 30 executions completed without Prolog syntax errors. The single failure was a semantic query-polarity mismatch produced by the LLM (it chose a counterexample-exists query whose truth value is the opposite of the user's yes/no question) — the Prolog engine itself answered correctly.
+The gap is concentrated in **constraint** (SEND+MORE, 6-queens, knapsack, K4 coloring, Einstein-lite) and **multi-step** (Nim game theory, 3-person knights-and-knaves, TSP-4, zebra puzzle) — exactly the combinatorial/search-heavy territory where symbolic solvers outperform pattern completion. On purely deductive or transitive questions the LLM is already strong and Prolog adds latency without accuracy gains.
 
-LLM-only fails on cases requiring multi-step constraint satisfaction (einstein-style puzzles) and knight/knave logic; routing through Prolog recovers both reliably.
+All 3 LLM+Prolog failures were Prolog execution errors from malformed LLM-generated code (missing predicate definitions, unbound CLP(FD) variables) rather than reasoning errors — addressable via prompt tuning.
 
 ### Running it yourself
 

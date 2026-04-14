@@ -13,9 +13,39 @@ logger = SecureLogger(__name__)
 
 _QUERY_COMMENT_PATTERN = re.compile(r"^%\s*Query:\s*(.+)$", re.MULTILINE)
 
+# Matches a fenced code block like ```prolog ... ``` or ``` ... ``` that
+# wraps the whole response. LLMs occasionally disobey the "no markdown" rule
+# and the fences become lexer errors downstream, so we strip them defensively.
+_CODE_FENCE_PATTERN = re.compile(
+    r"^\s*```[a-zA-Z]*\s*\n(.*?)\n```\s*$", re.DOTALL
+)
+
+
+def _strip_code_fence(text: str) -> str:
+    """Remove a surrounding markdown code fence if present."""
+    m = _CODE_FENCE_PATTERN.match(text)
+    return m.group(1) if m else text
+
 
 class PrologTranslator:
     """Translates natural language to Prolog code with self-correction."""
+
+    # Legacy prompt preserved for rollback. Was active through the v0.1.0
+    # development; being replaced with a minimal prompt as a controlled
+    # experiment to test whether fewer constraints yield better Prolog.
+    _LEGACY_SYSTEM_PROMPT = """\
+You are a Prolog code generator for SWI-Prolog.
+Convert natural language facts and queries into valid Prolog code.
+
+RULES:
+- Output ONLY valid Prolog code, no markdown or explanations
+- Use lowercase atoms mirroring entity names in the problem (e.g. knight, red); avoid numeric encodings of named entities
+- Include a comment "% Query: <query>" indicating the suggested query
+- The Query MUST be a single predicate call. If multiple goals are needed, define a wrapper predicate and call that — never put a comma-conjoined goal in the Query
+- Place the answer variable (the value being asked for) as the LAST argument of the Query predicate; for yes/no questions use a ground (variable-free) goal
+- For arithmetic, use is/2 (or #=/2 under CLP(FD)). Never leave bound variables as raw =/2 expressions — the result must be a numeric value, not an unevaluated term
+- Use standard SWI-Prolog predicates; do NOT use write/format/print to wrap results in prose — let the query expose bindings directly
+- Use CLP(FD) library (:- use_module(library(clpfd)).) only for INTEGER constraint problems; use permutation/member for non-integer domains"""
 
     SYSTEM_PROMPT = """\
 You are a Prolog code generator for SWI-Prolog.
@@ -23,10 +53,11 @@ Convert natural language facts and queries into valid Prolog code.
 
 RULES:
 - Output ONLY valid Prolog code, no markdown or explanations
-- Use lowercase for atoms, uppercase for variables
+- Use lowercase atoms mirroring entity names in the problem (e.g. knight, red); avoid numeric encodings of named entities
 - Include a comment "% Query: <query>" indicating the suggested query
-- Use standard SWI-Prolog predicates
-- Use CLP(FD) library (:- use_module(library(clpfd)).) for constraint problems"""
+- For arithmetic, use is/2 (or #=/2 under CLP(FD)); never leave bound variables as raw =/2 expressions
+- Use standard SWI-Prolog predicates; do NOT use write/format/print to wrap results in prose — let the query expose bindings directly
+- Use CLP(FD) library (:- use_module(library(clpfd)).) only for INTEGER constraint problems; use permutation/member for non-integer domains"""
 
     _CORRECTION_PROMPT_TEMPLATE = """\
 The following Prolog code has a syntax error. Fix it.
@@ -70,7 +101,7 @@ Keep the "% Query: <query>" comment."""
             temperature=self._temperature,
         )
 
-        prolog_code = response.strip()
+        prolog_code = _strip_code_fence(response.strip()).strip()
         if not prolog_code:
             raise TranslationError(
                 "LLM returned empty response",
@@ -168,7 +199,7 @@ Keep the "% Query: <query>" comment."""
             except TranslationError:
                 break
 
-            corrected = response.strip()
+            corrected = _strip_code_fence(response.strip()).strip()
             if not corrected:
                 break
 
@@ -206,14 +237,18 @@ Keep the "% Query: <query>" comment."""
     def _extract_query(prolog_code: str) -> str:
         """Extract suggested query from '% Query: <query>' comment.
 
-        Strips trailing period and surrounding whitespace to prevent
-        syntax errors when the query is embedded in the wrapper.
+        When multiple '% Query:' comments are present, the LAST one wins —
+        LLMs sometimes emit a natural-language paraphrase of the question
+        before the actual executable goal, and the final comment represents
+        the LLM's committed query.
+
+        Strips trailing period, question mark, and surrounding whitespace
+        to prevent syntax errors when the query is embedded in the wrapper.
         """
-        match = _QUERY_COMMENT_PATTERN.search(prolog_code)
-        if not match:
+        matches = _QUERY_COMMENT_PATTERN.findall(prolog_code)
+        if not matches:
             return ""
-        query = match.group(1).strip()
-        # Strip trailing period (LLM may output "% Query: mortal(socrates).")
-        if query.endswith("."):
-            query = query[:-1].rstrip()
+        query = matches[-1].strip()
+        # Strip trailing prose markers ("." or "?") that LLMs often append
+        query = query.rstrip(".?").rstrip()
         return query

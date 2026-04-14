@@ -94,6 +94,20 @@ class TestExtractQuery:
         code = "human(socrates)."
         assert PrologTranslator._extract_query(code) == ""
 
+    def test_multiple_queries_picks_last(self):
+        # LLMs sometimes emit an NL paraphrase first, then the real goal.
+        # The last % Query: comment is the LLM's committed executable goal.
+        code = (
+            "% Query: Is it true that all birds can fly?\n"
+            "all_birds_can_fly :- \\+ (bird(X), \\+ can_fly(X)).\n"
+            "% Query: all_birds_can_fly"
+        )
+        assert PrologTranslator._extract_query(code) == "all_birds_can_fly"
+
+    def test_strips_trailing_question_mark(self):
+        code = "% Query: is_bigger(a, e)?"
+        assert PrologTranslator._extract_query(code) == "is_bigger(a, e)"
+
 
 class TestTranslateWithCorrection:
     @pytest.mark.asyncio

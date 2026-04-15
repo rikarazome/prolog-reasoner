@@ -5,21 +5,21 @@
 [![CI](https://github.com/rikarazome/prolog-reasoner/actions/workflows/test.yml/badge.svg)](https://github.com/rikarazome/prolog-reasoner/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-SWI-Prolog as a "logic calculator" for LLMs — available as an MCP server and a Python library.
+SWI-Prolog as a "logic calculator" for LLMs — available as an MCP server and a Python library. Eliminate the black box from LLM logical reasoning.
 
 LLMs excel at natural language but struggle with formal logic. Prolog excels at logical reasoning but can't process natural language. **prolog-reasoner** bridges this gap by exposing SWI-Prolog execution to LLMs through two complementary surfaces:
 
 - **MCP server** — the connected LLM (e.g. Claude) writes Prolog and executes it via the server. No LLM API key needed on the server side.
 - **Python library** — a full NL→Prolog pipeline with self-correction, for programs that don't have an LLM in the loop. Requires an OpenAI or Anthropic API key.
 
-Both surfaces share the same Prolog executor; the library adds an LLM-based translator on top.
+Both surfaces share the same Prolog executor; the library adds an LLM-based translator on top. In either mode, the Prolog code is the reasoning — you can see what was inferred, how, and why.
 
 ## Features
 
 - **MCP tool** (`execute_prolog`): run arbitrary SWI-Prolog code with a query
+- **Transparent intermediate representation**: the Prolog code is the audit trail — inspect, modify, or verify before execution
 - **CLP(FD) support**: constraint logic programming for scheduling and optimization
 - **Negation-as-failure, recursion, all standard SWI-Prolog features**
-- **Transparent intermediate representation**: inspect / modify Prolog before execution
 - **Library mode**: NL→Prolog translation with self-correction loop (OpenAI / Anthropic)
 
 ## Requirements
@@ -198,7 +198,7 @@ Per-category breakdown:
 
 The gap is concentrated in **constraint** (SEND+MORE, 6-queens, knapsack, K4 coloring, Einstein-lite) and **multi-step** (Nim game theory, 3-person knights-and-knaves, TSP-4, zebra puzzle) — exactly the combinatorial/search-heavy territory where symbolic solvers outperform pattern completion. On purely deductive or transitive questions the LLM is already strong and Prolog adds latency without accuracy gains.
 
-All 3 LLM+Prolog failures were Prolog execution errors from malformed LLM-generated code (missing predicate definitions, unbound CLP(FD) variables) rather than reasoning errors — addressable via prompt tuning.
+All 3 LLM+Prolog failures were Prolog execution errors from malformed LLM-generated code (missing predicate definitions, unbound CLP(FD) variables) rather than reasoning errors — addressable via prompt tuning. Notably, every failure is inspectable: you can see the exact Prolog that failed and why, rather than a wrong natural-language answer with no explanation.
 
 ### Running it yourself
 
@@ -208,6 +208,29 @@ docker run --rm -e PROLOG_REASONER_LLM_API_KEY=sk-... \
 ```
 
 Results are saved to `benchmarks/results.json`.
+
+## Comparison with other Prolog MCPs
+
+Several Prolog MCP servers exist, each with different design choices. **prolog-reasoner** is intentionally stateless and spot-use — Prolog is a calculator you call when logic matters, not the backbone of your agent's memory.
+
+| | prolog-reasoner | Stateful Prolog MCPs |
+|---|---|---|
+| Prolog's role | Per-call reasoning tool | Project-wide knowledge base |
+| State | Stateless (each call independent) | Persistent sessions / layered KBs |
+| Reproducibility | Same input → same output, always | Depends on accumulated state |
+| Integration effort | Use where logic matters, skip where it doesn't | Architectural commitment |
+| A/B testable vs LLM-only | Yes (each call is a controlled experiment) | Structurally not comparable |
+
+This is also why accuracy benchmarks are published here and not elsewhere: statelessness is what makes a side-by-side comparison possible.
+
+If you need persistent agent memory, hallucination-safeguarded fact storage, or a full neuro-symbolic substrate, other projects may fit better:
+
+- [adamrybinski/prolog-mcp](https://github.com/adamrybinski/prolog-mcp) — Trealla WASM with save/load sessions
+- [umuro/prolog-mcp](https://github.com/umuro/prolog-mcp) — layered KB with file-backed persistence
+- [vpursuit/model-context-lab](https://github.com/vpursuit/model-context-lab) — SWI-Prolog with security sandboxing
+- [dr3d/prolog-reasoning](https://github.com/dr3d/prolog-reasoning) — neuro-symbolic memory with write-path safety
+
+We're the spot-use option.
 
 ## Development
 

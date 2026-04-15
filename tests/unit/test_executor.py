@@ -7,7 +7,7 @@ import pytest
 
 from prolog_reasoner.config import Settings
 from prolog_reasoner.errors import BackendError
-from prolog_reasoner.executor import PrologExecutor
+from prolog_reasoner.executor import PrologExecutor, _classify_error
 
 
 @pytest.fixture
@@ -180,3 +180,116 @@ class TestEdgeCases:
         # Ensure no cross-contamination
         assert "2" not in r1.output
         assert "1" not in r2.output
+
+
+class TestClassifyError:
+    """Unit tests for the pattern-based error classifier."""
+
+    def test_undefined_predicate_unknown_procedure(self):
+        text = "ERROR: /tmp/foo.pl:14: animal/1: Unknown procedure: cat/1"
+        category, explanation = _classify_error(text)
+        assert category == "undefined_predicate"
+        assert "cat/1" in explanation
+
+    def test_undefined_predicate_existence_error(self):
+        text = "ERROR: existence_error(procedure, user:solve/1)"
+        category, explanation = _classify_error(text)
+        assert category == "undefined_predicate"
+        assert "user:solve/1" in explanation
+
+    def test_unbound_variable_instantiation_phrase(self):
+        text = "ERROR: /tmp/foo.pl:10: >/2: Arguments are not sufficiently instantiated"
+        category, _ = _classify_error(text)
+        assert category == "unbound_variable"
+
+    def test_unbound_variable_instantiation_error_tag(self):
+        text = "ERROR: instantiation_error"
+        category, _ = _classify_error(text)
+        assert category == "unbound_variable"
+
+    def test_syntax_error(self):
+        text = "ERROR: /tmp/foo.pl:1:14: Syntax error: Unexpected end of file"
+        category, _ = _classify_error(text)
+        assert category == "syntax_error"
+
+    def test_type_error_captures_expected_type(self):
+        text = "ERROR: type_error(integer, foo)"
+        category, explanation = _classify_error(text)
+        assert category == "type_error"
+        assert "integer" in explanation
+
+    def test_domain_error(self):
+        text = "ERROR: domain_error(not_less_than_zero, -1)"
+        category, explanation = _classify_error(text)
+        assert category == "domain_error"
+        assert "not_less_than_zero" in explanation
+
+    def test_evaluation_error_zero_divisor_specific(self):
+        text = "ERROR: evaluation_error(zero_divisor)"
+        category, explanation = _classify_error(text)
+        assert category == "evaluation_error"
+        assert "zero" in explanation.lower()
+
+    def test_permission_error(self):
+        text = "ERROR: permission_error(modify, static_procedure, foo/1)"
+        category, _ = _classify_error(text)
+        assert category == "permission_error"
+
+    def test_unknown_fallback(self):
+        text = "Something completely unexpected"
+        category, explanation = _classify_error(text)
+        assert category == "unknown"
+        assert "raw message" in explanation
+
+    def test_syntax_checked_before_cascading_errors(self):
+        """A syntax error may also trigger unknown-procedure errors; we want
+        the syntax classification to win."""
+        text = (
+            "ERROR: /tmp/foo.pl:1:14: Syntax error: Unexpected end of file\n"
+            "ERROR: Unknown procedure: foo/1"
+        )
+        category, _ = _classify_error(text)
+        assert category == "syntax_error"
+
+
+class TestErrorClassificationIntegration:
+    """Integration tests: classification embedded in ExecutionResult."""
+
+    @pytest.mark.asyncio
+    async def test_undefined_predicate_from_real_prolog(self, executor):
+        code = "human(socrates)."
+        result = await executor.execute(code, "mortal(X)")
+        assert result.success is False
+        assert result.metadata["error_category"] == "undefined_predicate"
+        assert "not defined" in result.metadata["error_explanation"]
+
+    @pytest.mark.asyncio
+    async def test_unbound_variable_from_real_prolog(self, executor):
+        code = "check(X, Y) :- X > Y."
+        result = await executor.execute(code, "check(X, 5)")
+        assert result.success is False
+        assert result.metadata["error_category"] == "unbound_variable"
+
+    @pytest.mark.asyncio
+    async def test_syntax_error_from_real_prolog(self, executor):
+        code = "human(socrates"  # Missing paren and period
+        result = await executor.execute(code, "human(X)")
+        assert result.success is False
+        assert result.metadata["error_category"] == "syntax_error"
+
+    @pytest.mark.asyncio
+    async def test_timeout_classified_as_timeout(self, executor):
+        code = "loop :- loop."
+        result = await executor.execute(code, "loop", timeout_seconds=1.0)
+        assert result.success is False
+        assert result.metadata["error_category"] == "timeout"
+        assert "time limit" in result.metadata["error_explanation"]
+
+    @pytest.mark.asyncio
+    async def test_success_has_no_error_fields(self, executor):
+        """Successful executions must not carry error_category/error_explanation."""
+        code = "human(socrates)."
+        result = await executor.execute(code, "human(X)")
+        assert result.success is True
+        assert "error_category" not in result.metadata
+        assert "error_explanation" not in result.metadata

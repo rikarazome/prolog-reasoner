@@ -99,7 +99,9 @@ docker build -f docker/Dockerfile -t prolog-reasoner .
 - `query` — Prolog query to run, e.g. `"mortal(X)"` (string)
 - `max_results` — cap the number of solutions returned (default 100)
 
-Returns a JSON object with `success`, `output`, `query`, `error`, and `metadata` (execution time, result count, truncated flag).
+Returns a JSON object with `success`, `output`, `query`, `error`, and `metadata`.
+
+On success, `metadata` includes `execution_time_ms`, `result_count`, and `truncated`. On failure, `metadata` also includes `error_category` (one of `syntax_error`, `undefined_predicate`, `unbound_variable`, `type_error`, `domain_error`, `evaluation_error`, `permission_error`, `timeout`, `unknown`) and `error_explanation` — a natural-language hint for the connected LLM (or human) to decide how to fix the Prolog code.
 
 ## Library Usage
 

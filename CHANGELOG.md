@@ -5,6 +5,11 @@ All notable changes to prolog-reasoner will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Structured error classification on `ExecutionResult.metadata`: `error_category` (syntax_error / undefined_predicate / unbound_variable / type_error / domain_error / evaluation_error / permission_error / timeout / unknown) and `error_explanation` (natural-language hint). The raw `error` field is preserved for callers that need the original SWI-Prolog output.
+
 ## [0.1.0] - 2026-04-14
 
 ### Added

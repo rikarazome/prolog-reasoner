@@ -47,3 +47,6 @@ benchmarks/results.json
 
 # Local assistant state
 .claude/
+
+# Local workspace (not tracked)
+.workspace/

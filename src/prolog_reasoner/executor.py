@@ -41,6 +41,71 @@ _QUERY_WRAPPER_TEMPLATE = """\
 
 _TRUNCATED_MARKER = "__TRUNCATED__"
 
+# Meta-interpreter prepended to user code when trace=True.
+# Generates structured proof terms via clause/2 introspection. Uses '$pr_prove'
+# as predicate name to minimize collision risk with user code.
+# The defined-guard + cut on the clause/2 branch is critical: without it,
+# Prolog falls through to the opaque branch after clause/2 exhaustion and
+# every defined predicate's solutions are duplicated as opaque(...).
+_META_INTERPRETER = """\
+'$pr_prove'(true, true) :- !.
+'$pr_prove'((A,B), (PA,PB)) :- !, '$pr_prove'(A, PA), '$pr_prove'(B, PB).
+'$pr_prove'((A;B), P) :- !, ( '$pr_prove'(A, P) ; '$pr_prove'(B, P) ).
+'$pr_prove'(\\+ G, negation_as_failure(G)) :- !, \\+ call(G).
+'$pr_prove'(G, clpfd_constraint(G)) :-
+    catch(predicate_property(G, imported_from(clpfd)), _, fail), !,
+    call(G).
+'$pr_prove'(G, builtin(G)) :- predicate_property(G, built_in), !, call(G).
+'$pr_prove'(G, proof(G, Body)) :-
+    predicate_property(G, defined), !,
+    clause(G, B),
+    '$pr_prove'(B, Body).
+'$pr_prove'(G, opaque(G)) :- call(G)."""
+
+# Trace-mode wrapper: emits one display line + one __PR_PROOF__: line per
+# solution. Counter logic mirrors _QUERY_WRAPPER_TEMPLATE.
+_TRACE_QUERY_WRAPPER_TEMPLATE = """\
+:- nb_setval('__pr_count', 0).
+:- ( '$pr_prove'((__QUERY__), __PR_PROOF__),
+     nb_getval('__pr_count', __PR_N),
+     ( __PR_N >= __MAX_RESULTS__
+     -> (write('__TRUNCATED__'), nl, !)
+     ;  (__PR_N1 is __PR_N + 1,
+         nb_setval('__pr_count', __PR_N1),
+         write_canonical((__QUERY__)), nl,
+         write('__PR_PROOF__:'),
+         write_canonical(__PR_PROOF__), nl,
+         fail)
+     )
+   ; true
+   ),
+   nb_getval('__pr_count', __PR_Final),
+   ( __PR_Final =:= 0 -> write(false), nl ; true ),
+   halt(0).
+:- halt(1)."""
+
+_PROOF_PREFIX = "__PR_PROOF__:"
+
+
+def _parse_trace_output(stdout: str) -> tuple[str, list[str]]:
+    """Split trace-mode stdout into (display_output, proof_traces).
+
+    Lines prefixed with __PR_PROOF__: are extracted into the proof list
+    (preserving order); everything else is preserved as user-visible output.
+    """
+    display_lines: list[str] = []
+    proofs: list[str] = []
+    for line in stdout.splitlines():
+        if line.startswith(_PROOF_PREFIX):
+            proofs.append(line[len(_PROOF_PREFIX):])
+        else:
+            display_lines.append(line)
+    display = "\n".join(display_lines)
+    if display_lines:
+        display += "\n"
+    return display, proofs
+
+
 # Error classification patterns. Each entry: (regex, category, explanation template).
 # The first capture group (if any) is substituted into `{match}` in the template.
 # Order matters: check syntax errors first since they can cascade into other errors.
@@ -130,6 +195,25 @@ def _classify_error(error_text: str) -> tuple[str, str]:
     return "unknown", _UNKNOWN_EXPLANATION
 
 
+def _classify_error_with_trace(stderr_text: str) -> tuple[str, str]:
+    """Classify trace-mode errors, preserving user-level categories.
+
+    The meta-interpreter's call chain places `'$pr_prove'` in stderr for any
+    error raised during user-code execution, so a naive substring check would
+    misclassify every user error as a trace-mechanism bug. We only upgrade
+    to trace_mechanism_error when the standard classifier returned 'unknown'.
+    """
+    category, explanation = _classify_error(stderr_text)
+    if category == "unknown" and "$pr_prove" in stderr_text:
+        return (
+            "trace_mechanism_error",
+            "An internal error occurred in the proof trace mechanism. "
+            "This is likely a bug in prolog-reasoner. Please report it "
+            "along with the Prolog code and query.",
+        )
+    return category, explanation
+
+
 class PrologExecutor:
     """Executes Prolog code via SWI-Prolog subprocess."""
 
@@ -143,6 +227,7 @@ class PrologExecutor:
         query: str,
         max_results: int = 100,
         timeout_seconds: float | None = None,
+        trace: bool = False,
     ) -> ExecutionResult:
         """Execute Prolog code with a query and return results.
 
@@ -151,6 +236,8 @@ class PrologExecutor:
             query: Prolog query to execute.
             max_results: Maximum number of results (runaway prevention).
             timeout_seconds: Override default timeout. None uses settings value.
+            trace: When True, return structured proof trees for each solution
+                in metadata["proof_trace"]. Adds meta-interpreter overhead.
 
         Returns:
             ExecutionResult with output text and metadata.
@@ -159,12 +246,23 @@ class PrologExecutor:
         """
         timeout = timeout_seconds if timeout_seconds is not None else self._default_timeout
 
+        wrapper_template = (
+            _TRACE_QUERY_WRAPPER_TEMPLATE if trace else _QUERY_WRAPPER_TEMPLATE
+        )
         wrapper = (
-            _QUERY_WRAPPER_TEMPLATE
+            wrapper_template
             .replace("__QUERY__", query)
             .replace("__MAX_RESULTS__", str(max_results))
         )
-        prolog_input = _UTF8_HEADER + "\n" + prolog_code + "\n" + wrapper
+        if trace:
+            prolog_input = (
+                _UTF8_HEADER + "\n"
+                + _META_INTERPRETER + "\n"
+                + prolog_code + "\n"
+                + wrapper
+            )
+        else:
+            prolog_input = _UTF8_HEADER + "\n" + prolog_code + "\n" + wrapper
 
         start_time = time.monotonic()
 
@@ -218,12 +316,14 @@ class PrologExecutor:
                 "ERROR:" in line for line in stderr_text.splitlines()
             )
 
+            classify = _classify_error_with_trace if trace else _classify_error
+
             if proc.returncode != 0:
                 logger.error(
                     f"SWI-Prolog exited with code {proc.returncode}: "
                     f"{stderr_text[:200]}"
                 )
-                category, explanation = _classify_error(stderr_text)
+                category, explanation = classify(stderr_text)
                 return ExecutionResult(
                     success=False,
                     output="",
@@ -238,10 +338,14 @@ class PrologExecutor:
                 )
 
             if has_prolog_error:
-                category, explanation = _classify_error(stderr_text)
+                category, explanation = classify(stderr_text)
+                # Strip proof lines from user-visible output even on error.
+                error_output = (
+                    _parse_trace_output(stdout_text)[0] if trace else stdout_text
+                )
                 return ExecutionResult(
                     success=False,
-                    output=stdout_text,
+                    output=error_output,
                     query=query,
                     error=stderr_text,
                     metadata={
@@ -252,8 +356,14 @@ class PrologExecutor:
                     },
                 )
 
-            truncated = stdout_text.rstrip().endswith(_TRUNCATED_MARKER)
-            result_count = self._count_results(stdout_text)
+            if trace:
+                display_text, proof_traces = _parse_trace_output(stdout_text)
+            else:
+                display_text = stdout_text
+                proof_traces = None
+
+            truncated = display_text.rstrip().endswith(_TRUNCATED_MARKER)
+            result_count = self._count_results(display_text)
 
             warnings = [
                 line for line in stderr_text.splitlines() if line.strip()
@@ -267,10 +377,12 @@ class PrologExecutor:
             }
             if warnings:
                 metadata["prolog_warnings"] = warnings
+            if trace:
+                metadata["proof_trace"] = proof_traces
 
             return ExecutionResult(
                 success=True,
-                output=stdout_text,
+                output=display_text,
                 query=query,
                 metadata=metadata,
             )

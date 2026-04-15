@@ -7,7 +7,12 @@ import pytest
 
 from prolog_reasoner.config import Settings
 from prolog_reasoner.errors import BackendError
-from prolog_reasoner.executor import PrologExecutor, _classify_error
+from prolog_reasoner.executor import (
+    PrologExecutor,
+    _classify_error,
+    _classify_error_with_trace,
+    _parse_trace_output,
+)
 
 
 @pytest.fixture
@@ -250,6 +255,228 @@ class TestClassifyError:
         )
         category, _ = _classify_error(text)
         assert category == "syntax_error"
+
+
+class TestParseTraceOutput:
+    """Pure unit tests for _parse_trace_output (no subprocess)."""
+
+    def test_splits_proof_lines_from_display(self):
+        stdout = (
+            "mortal(socrates)\n"
+            "__PR_PROOF__:proof(mortal(socrates),proof(human(socrates),true))\n"
+            "mortal(plato)\n"
+            "__PR_PROOF__:proof(mortal(plato),proof(human(plato),true))\n"
+        )
+        display, proofs = _parse_trace_output(stdout)
+        assert "__PR_PROOF__" not in display
+        assert "mortal(socrates)" in display
+        assert "mortal(plato)" in display
+        assert len(proofs) == 2
+        assert "proof(mortal(socrates)" in proofs[0]
+        assert "proof(mortal(plato)" in proofs[1]
+
+    def test_empty_input(self):
+        display, proofs = _parse_trace_output("")
+        assert display == ""
+        assert proofs == []
+
+    def test_only_proof_lines(self):
+        stdout = "__PR_PROOF__:p1\n__PR_PROOF__:p2\n"
+        display, proofs = _parse_trace_output(stdout)
+        assert display == ""
+        assert proofs == ["p1", "p2"]
+
+
+class TestClassifyErrorWithTrace:
+    """Pure unit tests for _classify_error_with_trace."""
+
+    def test_known_user_error_not_upgraded(self):
+        """Undefined predicate must remain undefined_predicate, not trace_mechanism_error."""
+        text = "ERROR: Unknown procedure: cat/1\nERROR: In: '$pr_prove'/2"
+        category, _ = _classify_error_with_trace(text)
+        assert category == "undefined_predicate"
+
+    def test_unknown_with_pr_prove_upgraded(self):
+        text = "ERROR: Some unrecognized error in '$pr_prove'/2"
+        category, explanation = _classify_error_with_trace(text)
+        assert category == "trace_mechanism_error"
+        assert "trace mechanism" in explanation
+
+    def test_unknown_without_pr_prove_stays_unknown(self):
+        text = "Something completely unexpected"
+        category, _ = _classify_error_with_trace(text)
+        assert category == "unknown"
+
+    def test_syntax_error_not_upgraded_even_with_pr_prove(self):
+        text = "ERROR: Syntax error in '$pr_prove' chain"
+        category, _ = _classify_error_with_trace(text)
+        assert category == "syntax_error"
+
+
+class TestTrace:
+    """Integration tests for trace=True (require SWI-Prolog)."""
+
+    @pytest.mark.asyncio
+    async def test_trace_simple_fact(self, executor):
+        result = await executor.execute(
+            "human(socrates).", "human(X)", trace=True,
+        )
+        assert result.success is True
+        proofs = result.metadata["proof_trace"]
+        assert len(proofs) == 1
+        assert "human(socrates)" in proofs[0]
+        assert "true" in proofs[0]
+
+    @pytest.mark.asyncio
+    async def test_trace_rule_chain(self, executor):
+        code = "human(socrates). mortal(X) :- human(X)."
+        result = await executor.execute(code, "mortal(X)", trace=True)
+        assert result.success is True
+        proofs = result.metadata["proof_trace"]
+        assert len(proofs) == 1
+        assert "proof(" in proofs[0]
+        assert "mortal(socrates)" in proofs[0]
+        assert "human(socrates)" in proofs[0]
+
+    @pytest.mark.asyncio
+    async def test_trace_conjunction(self, executor):
+        code = "p :- q, r. q. r."
+        result = await executor.execute(code, "p", trace=True)
+        assert result.success is True
+        proofs = result.metadata["proof_trace"]
+        assert len(proofs) == 1
+        # Conjunction body shows up as a tuple structure.
+        assert "q" in proofs[0]
+        assert "r" in proofs[0]
+
+    @pytest.mark.asyncio
+    async def test_trace_disjunction(self, executor):
+        # Two solutions: one via q, one via r.
+        code = "p :- q ; r. q. r."
+        result = await executor.execute(code, "p", trace=True)
+        assert result.success is True
+        proofs = result.metadata["proof_trace"]
+        assert len(proofs) == 2
+
+    @pytest.mark.asyncio
+    async def test_trace_builtin(self, executor):
+        result = await executor.execute(
+            "% no rules", "X is 1+1", trace=True,
+        )
+        assert result.success is True
+        proofs = result.metadata["proof_trace"]
+        assert len(proofs) == 1
+        assert "builtin(" in proofs[0]
+
+    @pytest.mark.asyncio
+    async def test_trace_negation(self, executor):
+        code = "human(socrates)."
+        result = await executor.execute(
+            code, "\\+ human(zeus)", trace=True,
+        )
+        assert result.success is True
+        proofs = result.metadata["proof_trace"]
+        assert len(proofs) == 1
+        assert "negation_as_failure" in proofs[0]
+
+    @pytest.mark.asyncio
+    async def test_trace_multiple_solutions(self, executor):
+        code = "human(socrates). human(plato). mortal(X) :- human(X)."
+        result = await executor.execute(code, "mortal(X)", trace=True)
+        assert result.success is True
+        proofs = result.metadata["proof_trace"]
+        assert len(proofs) == 2
+        # Order preservation: socrates before plato (definition order).
+        assert "socrates" in proofs[0]
+        assert "plato" in proofs[1]
+
+    @pytest.mark.asyncio
+    async def test_trace_off_no_proof_field(self, executor):
+        result = await executor.execute(
+            "human(socrates).", "human(X)",
+        )
+        assert result.success is True
+        assert "proof_trace" not in result.metadata
+
+    @pytest.mark.asyncio
+    async def test_trace_zero_solutions_empty_list(self, executor):
+        result = await executor.execute(
+            "human(socrates).", "human(plato)", trace=True,
+        )
+        assert result.success is True
+        assert result.metadata["proof_trace"] == []
+
+    @pytest.mark.asyncio
+    async def test_trace_with_syntax_error(self, executor):
+        # Syntax error: existing error path; no proof_trace.
+        result = await executor.execute(
+            "human(socrates", "human(X)", trace=True,
+        )
+        assert result.success is False
+        assert "proof_trace" not in result.metadata
+        assert result.metadata["error_category"] == "syntax_error"
+
+    @pytest.mark.asyncio
+    async def test_trace_clpfd_documented_limitation(self, executor):
+        """CLP(FD) goals expanded by goal_expansion contain module-qualified
+        internal predicates (e.g. clpfd:clpfd_in/2) whose internal helpers
+        (fd_variable/1 etc.) cannot be resolved when called via the user-module
+        meta-interpreter. Documented limitation: trace=True is not supported
+        for CLP(FD)-bearing code. trace=False continues to work normally."""
+        code = (
+            ":- use_module(library(clpfd)).\n"
+            "solve(X) :- X in 1..3, X #> 1, label([X])."
+        )
+        # trace=False path must remain fully functional.
+        result = await executor.execute(code, "solve(X)")
+        assert result.success is True
+        assert "2" in result.output and "3" in result.output
+
+    @pytest.mark.asyncio
+    async def test_trace_truncation_matches_output(self, executor):
+        code = "num(1). num(2). num(3). num(4). num(5)."
+        result = await executor.execute(
+            code, "num(X)", max_results=3, trace=True,
+        )
+        assert result.success is True
+        assert result.metadata["truncated"] is True
+        assert result.metadata["result_count"] == 3
+        assert len(result.metadata["proof_trace"]) == 3
+
+    @pytest.mark.asyncio
+    async def test_trace_compound_query(self, executor):
+        """Regression: top-level comma in query must be preserved as a single goal."""
+        code = "human(socrates). human(plato). mortal(X) :- human(X)."
+        result = await executor.execute(
+            code, "human(X), mortal(X)", trace=True,
+        )
+        assert result.success is True
+        assert "socrates" in result.output
+        assert "plato" in result.output
+        assert len(result.metadata["proof_trace"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_trace_undefined_predicate_classified_correctly(self, executor):
+        """Regression: undefined predicate must NOT be classified as trace_mechanism_error."""
+        result = await executor.execute(
+            "human(socrates).", "mortal(X)", trace=True,
+        )
+        assert result.success is False
+        assert result.metadata["error_category"] == "undefined_predicate"
+
+    @pytest.mark.asyncio
+    async def test_trace_no_duplicate_solutions(self, executor):
+        """Regression: clause/2 branch must commit (defined-guard + cut), so
+        results are not duplicated by fall-through to opaque(...)."""
+        code = "human(socrates). human(plato)."
+        result = await executor.execute(code, "human(X)", trace=True)
+        assert result.success is True
+        assert result.metadata["result_count"] == 2
+        proofs = result.metadata["proof_trace"]
+        assert len(proofs) == 2
+        # No proof should be tagged as opaque(...) for a defined predicate.
+        joined = " ".join(proofs)
+        assert "opaque(" not in joined
 
 
 class TestErrorClassificationIntegration:

@@ -94,14 +94,24 @@ docker build -f docker/Dockerfile -t prolog-reasoner .
 
 ### Tool reference
 
-**`execute_prolog(prolog_code, query, max_results=100)`**
+**`execute_prolog(prolog_code, query, max_results=100, trace=False)`**
 - `prolog_code` — Prolog facts and rules (string)
 - `query` — Prolog query to run, e.g. `"mortal(X)"` (string)
 - `max_results` — cap the number of solutions returned (default 100)
+- `trace` — when `True`, attach a structured proof tree per solution to `metadata.proof_trace` (opt-in; adds meta-interpreter overhead)
 
 Returns a JSON object with `success`, `output`, `query`, `error`, and `metadata`.
 
-On success, `metadata` includes `execution_time_ms`, `result_count`, and `truncated`. On failure, `metadata` also includes `error_category` (one of `syntax_error`, `undefined_predicate`, `unbound_variable`, `type_error`, `domain_error`, `evaluation_error`, `permission_error`, `timeout`, `unknown`) and `error_explanation` — a natural-language hint for the connected LLM (or human) to decide how to fix the Prolog code.
+On success, `metadata` includes `execution_time_ms`, `result_count`, and `truncated`. On failure, `metadata` also includes `error_category` (one of `syntax_error`, `undefined_predicate`, `unbound_variable`, `type_error`, `domain_error`, `evaluation_error`, `permission_error`, `timeout`, `trace_mechanism_error`, `unknown`) and `error_explanation` — a natural-language hint for the connected LLM (or human) to decide how to fix the Prolog code.
+
+When `trace=True` succeeds, `metadata.proof_trace` is a list of Prolog term strings — one per solution, in the same order as `output`. Each term uses these constructors: `proof(Goal, Body)` (rule application), `builtin(Goal)`, `negation_as_failure(Goal)`, `opaque(Goal)` (callable but not introspectable), and `(P1,P2)` for conjunctions. Zero-solution queries return an empty list. Errors return no `proof_trace` key.
+
+#### Trace limitations
+
+- **CLP(FD) is not supported with `trace=True`.** The clpfd library's goal_expansion produces module-qualified internal calls (e.g. `clpfd:clpfd_in/2`) whose internal helpers cannot be resolved through the user-module meta-interpreter. Use `trace=False` (the default) for CLP(FD) code.
+- **Cuts and if-then-else** semantics may differ from native execution — the meta-interpreter walks both branches of `(If -> Then ; Else)`.
+- **Higher-order predicates** (`call/N`, `maplist`, `findall`, etc.) and **assert/retract** appear as `builtin(...)` with no internal visibility.
+- Proof generation is intentionally slower than plain execution due to `clause/2` introspection.
 
 ## Library Usage
 

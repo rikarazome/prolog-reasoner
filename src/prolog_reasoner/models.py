@@ -17,6 +17,10 @@ class ExecutionRequest(BaseModel):
     prolog_code: str = Field(min_length=1, description="Prolog code")
     query: str = Field(min_length=1, description="Prolog query")
     max_results: int = Field(default=100, ge=1, le=10000)
+    trace: bool = Field(
+        default=False,
+        description="Return structured proof trees in metadata.proof_trace",
+    )
 
 
 class TranslationResult(BaseModel):

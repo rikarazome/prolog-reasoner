@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Structured error classification on `ExecutionResult.metadata`: `error_category` (syntax_error / undefined_predicate / unbound_variable / type_error / domain_error / evaluation_error / permission_error / timeout / unknown) and `error_explanation` (natural-language hint). The raw `error` field is preserved for callers that need the original SWI-Prolog output.
+- Opt-in proof trace via `trace: bool = False` parameter on `execute_prolog` (MCP) and `PrologExecutor.execute()` (library). When enabled, `metadata.proof_trace` returns a list of structured Prolog term strings — one per solution — built by a meta-interpreter (`'$pr_prove'/2`) that introspects rule application via `clause/2`. Constructors: `proof(Goal, Body)`, `builtin(Goal)`, `negation_as_failure(Goal)`, `opaque(Goal)`, conjunction tuples. Includes a new `trace_mechanism_error` category for self-detected meta-interpreter bugs. Default behavior (trace=False) is unchanged. Known limitation: CLP(FD)-bearing code is not supported with trace=True (use trace=False).
 
 ## [0.1.0] - 2026-04-14
 

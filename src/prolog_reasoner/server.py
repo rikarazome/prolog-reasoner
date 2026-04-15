@@ -35,6 +35,7 @@ async def execute_prolog(
     prolog_code: str,
     query: str,
     max_results: int = 100,
+    trace: bool = False,
 ) -> dict:
     """Execute Prolog code and return reasoning results.
 
@@ -46,17 +47,21 @@ async def execute_prolog(
         prolog_code: Prolog code (facts and rules).
         query: Prolog query to execute (e.g. "mortal(X)").
         max_results: Maximum number of results (prevents infinite loops).
+        trace: When True, include structured proof trees per solution in
+            metadata.proof_trace. Adds meta-interpreter overhead; opt-in.
     """
     _init()
     request = ExecutionRequest(
         prolog_code=prolog_code,
         query=query,
         max_results=max_results,
+        trace=trace,
     )
     result = await _executor.execute(
         prolog_code=request.prolog_code,
         query=request.query,
         max_results=request.max_results,
+        trace=request.trace,
     )
     return result.model_dump()
 

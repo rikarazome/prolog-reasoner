@@ -78,3 +78,28 @@ class TestMCPTools:
         )
         assert result["success"] is True
         assert result["metadata"]["result_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_execute_prolog_with_trace(self):
+        """trace=True surfaces proof_trace in metadata via MCP tool."""
+        result = await server_module.execute_prolog(
+            prolog_code="human(socrates). mortal(X) :- human(X).",
+            query="mortal(X)",
+            trace=True,
+        )
+        assert result["success"] is True
+        assert "proof_trace" in result["metadata"]
+        proofs = result["metadata"]["proof_trace"]
+        assert len(proofs) == 1
+        assert "mortal(socrates)" in proofs[0]
+        assert "human(socrates)" in proofs[0]
+
+    @pytest.mark.asyncio
+    async def test_execute_prolog_without_trace_default(self):
+        """Default invocation must not include proof_trace."""
+        result = await server_module.execute_prolog(
+            prolog_code="human(socrates).",
+            query="human(X)",
+        )
+        assert result["success"] is True
+        assert "proof_trace" not in result["metadata"]

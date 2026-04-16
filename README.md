@@ -7,12 +7,30 @@
 
 SWI-Prolog as a "logic calculator" for LLMs — available as an MCP server and a Python library. Eliminate the black box from LLM logical reasoning.
 
-LLMs excel at natural language but struggle with formal logic. Prolog excels at logical reasoning but can't process natural language. **prolog-reasoner** bridges this gap by exposing SWI-Prolog execution to LLMs through two complementary surfaces:
+LLMs excel at natural language but struggle with formal logic. Prolog excels at logical reasoning but can't process natural language. **prolog-reasoner** bridges this gap by exposing SWI-Prolog execution to LLMs. 
 
-- **MCP server** — the connected LLM (e.g. Claude) writes Prolog and executes it via the server. No LLM API key needed on the server side.
-- **Python library** — a full NL→Prolog pipeline with self-correction, for programs that don't have an LLM in the loop. Requires an OpenAI or Anthropic API key.
+## Does it help?
 
-Both surfaces share the same Prolog executor; the library adds an LLM-based translator on top. In either mode, the Prolog code is the reasoning — you can see what was inferred, how, and why.
+On the built-in 30-problem logic benchmark:
+
+| Pipeline | Accuracy |
+|----------|----------|
+| LLM-only (`claude-sonnet-4-6`) | 22/30 (73.3%) |
+| **LLM + prolog-reasoner** | **27/30 (90.0%)** |
+
+The gap concentrates in constraint satisfaction and multi-step reasoning — the combinatorial territory LLMs are weak on and Prolog is strong on. [Full breakdown below.](#benchmark)
+
+## Why it works
+
+LLMs pattern-match; Prolog actually searches and solves. When the LLM writes its problem down as Prolog, two things happen at once:
+
+- Prolog handles the combinatorial work LLMs are weak on — constraint satisfaction, multi-step inference, exhaustive search.
+- The reasoning exists as code you can read, re-run, and debug. When it goes wrong, you see the exact Prolog that failed and why.
+
+## Two ways to use it
+
+- **MCP server** — Claude (or any MCP client) calls it as a logic solver during conversation. **Rule bases** let the LLM save stable domain rules once and reference them by name per call.
+- **Python library** — full NL→Prolog pipeline with self-correction. Requires OpenAI or Anthropic.
 
 ## Features
 

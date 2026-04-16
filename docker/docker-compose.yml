@@ -15,6 +15,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    volumes:
+      - ..:/app
     environment:
       - PROLOG_REASONER_LLM_PROVIDER=${PROLOG_REASONER_LLM_PROVIDER:-openai}
       - PROLOG_REASONER_LLM_API_KEY=${PROLOG_REASONER_LLM_API_KEY:-dummy}

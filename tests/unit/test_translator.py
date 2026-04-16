@@ -3,14 +3,16 @@
 Uses mock LLM client — no API key needed.
 """
 
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
 from prolog_reasoner.config import Settings
-from prolog_reasoner.errors import LLMError, TranslationError
+from prolog_reasoner.errors import LLMError, RuleBaseError, TranslationError
 from prolog_reasoner.executor import PrologExecutor
 from prolog_reasoner.llm_client import LLMClient
+from prolog_reasoner.rule_base import RuleBaseStore
 from prolog_reasoner.translator import PrologTranslator
 
 
@@ -214,3 +216,188 @@ class TestTranslateWithCorrection:
         assert "translation_time_ms" in result.metadata
         assert isinstance(result.metadata["translation_time_ms"], int)
         assert result.metadata["translation_time_ms"] >= 0
+
+
+class TestTranslateWithRuleBases:
+    """Coverage for the rule_bases / rule_base_store path (v15) that was
+    previously unreachable from the public API."""
+
+    @pytest.fixture
+    def rule_store_settings(self, tmp_path: Path):
+        return Settings(
+            llm_api_key="dummy",
+            llm_temperature=0.0,
+            rules_dir=tmp_path / "rules",
+        )
+
+    @pytest.fixture
+    def rule_store(self, rule_store_settings) -> RuleBaseStore:
+        executor = PrologExecutor(rule_store_settings)
+        return RuleBaseStore(rule_store_settings, executor)
+
+    @pytest.fixture
+    def executor(self, rule_store_settings) -> PrologExecutor:
+        return PrologExecutor(rule_store_settings)
+
+    @pytest.fixture
+    def translator(self, mock_llm, rule_store_settings) -> PrologTranslator:
+        return PrologTranslator(mock_llm, rule_store_settings)
+
+    @pytest.mark.asyncio
+    async def test_section_injected_into_system_prompt(
+        self, translator, mock_llm, executor, rule_store
+    ):
+        """Rule base content should appear in the LLM's system_prompt."""
+        await rule_store.save(
+            "chess",
+            "% description: Chess rules\npiece(king).\npiece(queen).\n",
+        )
+        mock_llm.complete.return_value = (
+            "piece(X).\n% Query: piece(X)"
+        )
+        result = await translator.translate_with_correction(
+            query="list pieces",
+            context="",
+            executor=executor,
+            max_corrections=0,
+            rule_bases=["chess"],
+            rule_base_store=rule_store,
+        )
+        assert result.success is True
+        call = mock_llm.complete.call_args
+        system_prompt = call.kwargs["system_prompt"]
+        assert "Available rule bases" in system_prompt
+        assert "### chess" in system_prompt
+        assert "piece(king)" in system_prompt
+
+    @pytest.mark.asyncio
+    async def test_missing_store_raises_value_error(
+        self, translator, mock_llm, executor
+    ):
+        with pytest.raises(ValueError, match="rule_base_store"):
+            await translator.translate_with_correction(
+                query="test",
+                context="",
+                executor=executor,
+                max_corrections=0,
+                rule_bases=["any"],
+                rule_base_store=None,
+            )
+        mock_llm.complete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unknown_rule_base_returns_failure(
+        self, translator, mock_llm, executor, rule_store
+    ):
+        """RULEBASE_001 (not found) must convert to TranslationResult(success=False)
+        without calling the LLM."""
+        result = await translator.translate_with_correction(
+            query="test",
+            context="",
+            executor=executor,
+            max_corrections=0,
+            rule_bases=["does_not_exist"],
+            rule_base_store=rule_store,
+        )
+        assert result.success is False
+        assert result.metadata.get("error_code") == "RULEBASE_001"
+        mock_llm.complete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_invalid_name_returns_failure(
+        self, translator, mock_llm, executor, rule_store
+    ):
+        """RULEBASE_002 (invalid name) also converts to TranslationResult failure."""
+        result = await translator.translate_with_correction(
+            query="test",
+            context="",
+            executor=executor,
+            max_corrections=0,
+            rule_bases=["BadName!"],
+            rule_base_store=rule_store,
+        )
+        assert result.success is False
+        assert result.metadata.get("error_code") == "RULEBASE_002"
+
+    @pytest.mark.asyncio
+    async def test_rule_base_io_error_propagates(
+        self, translator, mock_llm, executor, rule_store, monkeypatch
+    ):
+        """RULEBASE_004 is infrastructure — must propagate, not be caught."""
+        def _boom(name: str) -> str:
+            raise RuleBaseError("disk gone", error_code="RULEBASE_004")
+
+        monkeypatch.setattr(rule_store, "get", _boom)
+        with pytest.raises(RuleBaseError) as exc_info:
+            await translator.translate_with_correction(
+                query="test",
+                context="",
+                executor=executor,
+                max_corrections=0,
+                rule_bases=["anything"],
+                rule_base_store=rule_store,
+            )
+        assert exc_info.value.error_code == "RULEBASE_004"
+
+    @pytest.mark.asyncio
+    async def test_truncation_marks_metadata(
+        self, mock_llm, tmp_path: Path, executor
+    ):
+        """When rule base content exceeds max_rule_prompt_bytes, the section is
+        truncated and metadata.rule_bases_truncated is True."""
+        small_budget_settings = Settings(
+            llm_api_key="dummy",
+            llm_temperature=0.0,
+            rules_dir=tmp_path / "rules",
+            max_rule_prompt_bytes=200,
+        )
+        store_exec = PrologExecutor(small_budget_settings)
+        store = RuleBaseStore(small_budget_settings, store_exec)
+        # First block fits within budget - second will overflow and trigger
+        # truncation with marker.
+        await store.save("a", "fact_a(1).\n")
+        await store.save("b", "% " + ("x" * 500) + "\nfact_b(1).\n")
+        translator = PrologTranslator(mock_llm, small_budget_settings)
+        mock_llm.complete.return_value = "ok.\n% Query: ok"
+        result = await translator.translate_with_correction(
+            query="test",
+            context="",
+            executor=executor,
+            max_corrections=0,
+            rule_bases=["a", "b"],
+            rule_base_store=store,
+        )
+        assert result.success is True
+        assert result.metadata.get("rule_bases_truncated") is True
+        system_prompt = mock_llm.complete.call_args.kwargs["system_prompt"]
+        assert "[truncated]" in system_prompt
+        # First (small) block must survive intact; truncation happens within
+        # the second block's content.
+        assert "fact_a(1)." in system_prompt
+        # The huge middle of block "b" must be mostly cut — assert the
+        # suffix "fact_b(1)." never reached the prompt.
+        assert "fact_b(1)." not in system_prompt
+        # Body (blocks + join separators, excluding the fixed header) must
+        # strictly respect the 200-byte budget.
+        blocks_start = system_prompt.index("### a")
+        body = system_prompt[blocks_start:]
+        assert len(body.encode("utf-8")) <= 200
+
+    @pytest.mark.asyncio
+    async def test_empty_rule_bases_skips_section(
+        self, translator, mock_llm, executor, rule_store
+    ):
+        """Empty rule_bases list must not inject any section or require a store."""
+        mock_llm.complete.return_value = "ok.\n% Query: ok"
+        result = await translator.translate_with_correction(
+            query="test",
+            context="",
+            executor=executor,
+            max_corrections=0,
+            rule_bases=[],
+            rule_base_store=None,  # allowed when list is empty
+        )
+        assert result.success is True
+        system_prompt = mock_llm.complete.call_args.kwargs["system_prompt"]
+        assert "Available rule bases" not in system_prompt
+        assert "rule_bases_truncated" not in result.metadata

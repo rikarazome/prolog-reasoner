@@ -1,6 +1,7 @@
 """Configuration management for prolog-reasoner."""
 
 import subprocess
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -29,6 +30,15 @@ class Settings(BaseSettings):
     # Prolog
     swipl_path: str = "swipl"
     execution_timeout_seconds: float = 10.0
+
+    # Rule bases (v14)
+    rules_dir: Path = Path.home() / ".prolog-reasoner" / "rules"
+    bundled_rules_dir: Path | None = None
+    max_rule_size: int = 1_048_576  # 1 MiB — per-file save cap
+    # Separate budget for the translator's "Available rule bases" prompt
+    # section. Defaulted far below max_rule_size because a 1 MiB prompt
+    # inflates LLM cost/latency and usually overflows the context window.
+    max_rule_prompt_bytes: int = 65_536  # 64 KiB
 
     # Logging
     log_level: str = "INFO"

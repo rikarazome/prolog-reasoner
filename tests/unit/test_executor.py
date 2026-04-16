@@ -124,8 +124,71 @@ class TestValidateSyntax:
         assert "ERROR" in error
 
     @pytest.mark.asyncio
-    async def test_directive_executed(self, executor):
-        code = ":- use_module(library(clpfd)).\nsolve(X) :- X in 1..5."
+    async def test_op_directive_applied(self, executor):
+        """op/3 is whitelisted, so user-defined operators parse in subsequent terms."""
+        code = ":- op(700, xfx, beats).\nrock beats scissors."
+        error = await executor.validate_syntax(code)
+        assert error is None
+
+    @pytest.mark.asyncio
+    async def test_use_module_not_executed_v14(self, executor):
+        """v14 contract: only op/3 directives run during parse-only validation.
+
+        Positive evidence of non-execution: the code references a library
+        that does not exist. If ``use_module`` were actually executed,
+        SWI-Prolog would raise ``existence_error(source_sink, ...)`` and
+        the error would leak into stderr. Since validation reads the term
+        without executing it, parsing succeeds and the result is ``None``.
+
+        (The clpfd operator prelude is a separate concern — it pre-declares
+        operators so that constraint code parses. See the companion
+        ``test_clpfd_operators_parse_via_prelude`` test for that property.)
+        """
+        code = (
+            ":- use_module(library('__pr_no_such_library_xyz__')).\n"
+            "fact(1)."
+        )
+        error = await executor.validate_syntax(code)
+        assert error is None, (
+            "use_module appears to have been executed — existence_error "
+            f"leaked: {error!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_clpfd_operators_parse_via_prelude(self, executor):
+        """The validator pre-declares clpfd operators so that typical
+        constraint code parses even though use_module is not executed."""
+        code = (
+            ":- use_module(library(clpfd)).\n"
+            "schedule(A, B, C) :-\n"
+            "    [A, B, C] ins 1..3,\n"
+            "    all_different([A, B, C]),\n"
+            "    A #< B,\n"
+            "    A #=< C,\n"
+            "    label([A, B, C])."
+        )
+        error = await executor.validate_syntax(code)
+        assert error is None, f"expected clpfd to parse, got: {error}"
+
+    @pytest.mark.asyncio
+    async def test_non_clpfd_library_operator_still_fails(self, executor):
+        """Operators from libraries *other than* clpfd are not in the
+        prelude, so code that relies on them still fails to parse. This
+        documents the remaining limitation called out in validate_syntax.
+        """
+        # `totally_made_up_op` is not a standard Prolog operator and not
+        # in our prelude, so parse-only treats it as an ordinary atom and
+        # the surrounding expression fails to read as infix.
+        code = "p(X, Y) :- X totally_made_up_op Y."
+        error = await executor.validate_syntax(code)
+        assert error is not None
+        assert "Syntax error" in error or "ERROR" in error
+
+    @pytest.mark.asyncio
+    async def test_non_op_directive_does_not_crash(self, executor):
+        """Non-op directives are parsed but not applied; a write/1 directive
+        must not actually run during validation, and parsing succeeds."""
+        code = ":- write('should_not_run').\nfact(1)."
         error = await executor.validate_syntax(code)
         assert error is None
 
@@ -477,6 +540,164 @@ class TestTrace:
         # No proof should be tagged as opaque(...) for a defined predicate.
         joined = " ".join(proofs)
         assert "opaque(" not in joined
+
+
+class TestRuleBaseContents:
+    """v14: executor.execute() accepts pre-resolved rule base contents."""
+
+    @pytest.mark.asyncio
+    async def test_none_matches_baseline(self, executor):
+        """rule_base_contents=None behaves identically to the no-arg path."""
+        code = "human(socrates)."
+        result = await executor.execute(code, "human(X)", rule_base_contents=None)
+        assert result.success is True
+        assert "socrates" in result.output
+        assert result.metadata["rule_bases_used"] == []
+        # Executor never measures on its own — caller must supply the value.
+        assert "rule_base_load_ms" not in result.metadata
+
+    @pytest.mark.asyncio
+    async def test_empty_list(self, executor):
+        """Empty list is equivalent to None."""
+        result = await executor.execute(
+            "fact(1).", "fact(X)", rule_base_contents=[],
+        )
+        assert result.success is True
+        assert result.metadata["rule_bases_used"] == []
+
+    @pytest.mark.asyncio
+    async def test_single_rule_base(self, executor):
+        """Rules from rule_base_contents participate in query resolution."""
+        rule_base = ("chess", "piece(king). piece(queen).")
+        result = await executor.execute(
+            prolog_code="% no user facts",
+            query="piece(X)",
+            rule_base_contents=[rule_base],
+        )
+        assert result.success is True
+        assert "king" in result.output
+        assert "queen" in result.output
+        assert result.metadata["rule_bases_used"] == ["chess"]
+
+    @pytest.mark.asyncio
+    async def test_multi_rule_bases_ordering_preserved(self, executor):
+        """metadata.rule_bases_used reflects the input order."""
+        contents = [
+            ("chess", "piece(king)."),
+            ("openings", "opening(italian)."),
+        ]
+        result = await executor.execute(
+            prolog_code="% empty",
+            query="piece(X)",
+            rule_base_contents=contents,
+        )
+        assert result.success is True
+        assert result.metadata["rule_bases_used"] == ["chess", "openings"]
+
+    @pytest.mark.asyncio
+    async def test_user_code_can_call_rule_base_predicate(self, executor):
+        """Rule base definitions are visible to the user-supplied code."""
+        rule_base = ("chess", "piece(king). piece(queen).")
+        code = "royal(X) :- piece(X)."
+        result = await executor.execute(
+            prolog_code=code,
+            query="royal(X)",
+            rule_base_contents=[rule_base],
+        )
+        assert result.success is True
+        assert "king" in result.output
+        assert "queen" in result.output
+        assert result.metadata["result_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_later_rule_base_sees_earlier_predicate(self, executor):
+        """Rule bases are concatenated in order, so later bases can
+        reference predicates from earlier ones."""
+        contents = [
+            ("pieces", "piece(king). piece(queen)."),
+            ("evaluation", "royal(X) :- piece(X)."),
+        ]
+        result = await executor.execute(
+            prolog_code="% empty",
+            query="royal(X)",
+            rule_base_contents=contents,
+        )
+        assert result.success is True
+        assert "king" in result.output
+        assert "queen" in result.output
+
+    @pytest.mark.asyncio
+    async def test_user_code_appended_after_rule_bases(self, executor):
+        """User code can override / extend rule base predicates."""
+        rule_base = ("chess", "piece(king).")
+        code = "piece(pawn)."  # appended, both are visible
+        result = await executor.execute(
+            prolog_code=code,
+            query="piece(X)",
+            rule_base_contents=[rule_base],
+        )
+        assert result.success is True
+        assert "king" in result.output
+        assert "pawn" in result.output
+
+    @pytest.mark.asyncio
+    async def test_rule_base_load_ms_echoes_caller_value(self, executor):
+        """metadata.rule_base_load_ms is caller-provided (§4.10).
+
+        The executor never measures disk I/O because rule_base_contents
+        arrive already resolved. The server/reasoner layer measures
+        store.get() and passes the value through; absent caller input, the
+        field is omitted entirely.
+        """
+        contents = [("chess", "piece(king).")]
+        # Without caller value: field absent.
+        result = await executor.execute(
+            "% empty", "piece(X)", rule_base_contents=contents,
+        )
+        assert "rule_base_load_ms" not in result.metadata
+        # With caller value: echoed verbatim.
+        result = await executor.execute(
+            "% empty", "piece(X)",
+            rule_base_contents=contents,
+            rule_base_load_ms=42,
+        )
+        assert result.metadata["rule_base_load_ms"] == 42
+
+    @pytest.mark.asyncio
+    async def test_rule_base_syntax_error_surfaces(self, executor):
+        """A syntactically broken rule base causes the execution to fail —
+        content validation is the caller's responsibility."""
+        bad = ("broken", "piece(king")  # missing paren + period
+        result = await executor.execute(
+            "% empty", "piece(X)", rule_base_contents=[bad],
+        )
+        assert result.success is False
+        assert result.error is not None
+
+    @pytest.mark.asyncio
+    async def test_trace_with_rule_base(self, executor):
+        """trace=True + rule_base_contents: proofs reference rule base rules."""
+        rule_base = ("pieces", "piece(king). royal(X) :- piece(X).")
+        result = await executor.execute(
+            prolog_code="% empty",
+            query="royal(X)",
+            rule_base_contents=[rule_base],
+            trace=True,
+        )
+        assert result.success is True
+        proofs = result.metadata["proof_trace"]
+        assert len(proofs) == 1
+        assert "royal(king)" in proofs[0]
+        assert "piece(king)" in proofs[0]
+
+    @pytest.mark.asyncio
+    async def test_utf8_in_rule_base(self, executor):
+        rule_base = ("greetings", 'hello("こんにちは").')
+        result = await executor.execute(
+            "% empty", "hello(X)", rule_base_contents=[rule_base],
+        )
+        assert result.success is True
+        assert "こんにちは" in result.output
 
 
 class TestErrorClassificationIntegration:

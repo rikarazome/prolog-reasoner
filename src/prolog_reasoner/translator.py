@@ -3,11 +3,12 @@
 import re
 
 from prolog_reasoner.config import Settings
-from prolog_reasoner.errors import LLMError, TranslationError
+from prolog_reasoner.errors import LLMError, RuleBaseError, TranslationError
 from prolog_reasoner.executor import PrologExecutor
 from prolog_reasoner.llm_client import LLMClient
 from prolog_reasoner.logger import SecureLogger
 from prolog_reasoner.models import TranslationResult
+from prolog_reasoner.rule_base import RuleBaseStore, dedup_names
 
 logger = SecureLogger(__name__)
 
@@ -74,15 +75,23 @@ Keep the "% Query: <query>" comment."""
     def __init__(self, llm_client: LLMClient, settings: Settings):
         self._llm = llm_client
         self._temperature = settings.llm_temperature
+        # Prompt budget is a separate setting from the per-file save cap:
+        # the latter is ~1 MiB, which is too large for an LLM prompt.
+        self._max_rule_prompt_bytes = settings.max_rule_prompt_bytes
 
     async def translate(
-        self, query: str, context: str = ""
+        self,
+        query: str,
+        context: str = "",
+        rule_bases_section: str = "",
     ) -> tuple[str, str]:
         """Translate natural language to Prolog code.
 
         Args:
             query: Natural language question or facts.
             context: Additional premises (natural language).
+            rule_bases_section: Optional ``Available rule bases:`` block to
+                append to the system prompt (v14). Empty string disables.
 
         Returns:
             Tuple of (prolog_code, suggested_query).
@@ -95,8 +104,12 @@ Keep the "% Query: <query>" comment."""
         if context:
             user_prompt = f"Context: {context}\n\nQuestion: {query}"
 
+        system_prompt = self.SYSTEM_PROMPT
+        if rule_bases_section:
+            system_prompt = f"{system_prompt}\n\n{rule_bases_section}"
+
         response = await self._llm.complete(
-            system_prompt=self.SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=self._temperature,
         )
@@ -117,6 +130,8 @@ Keep the "% Query: <query>" comment."""
         context: str,
         executor: PrologExecutor,
         max_corrections: int,
+        rule_bases: list[str] | None = None,
+        rule_base_store: RuleBaseStore | None = None,
     ) -> TranslationResult:
         """Translate with syntax validation and self-correction loop.
 
@@ -130,55 +145,98 @@ Keep the "% Query: <query>" comment."""
             context: Additional premises.
             executor: PrologExecutor for syntax validation.
             max_corrections: Max correction attempts (0 disables validation).
+            rule_bases: Names of rule bases to expose to the LLM via an
+                ``Available rule bases:`` section appended to the system
+                prompt (v14, design §4.3).
+            rule_base_store: RuleBaseStore for resolving ``rule_bases``.
+                Required when ``rule_bases`` is non-empty.
 
         Returns:
             TranslationResult (always, never raises for business errors).
 
         Raises:
+            ValueError: ``rule_bases`` non-empty but ``rule_base_store`` is
+                None (programming error).
             LLMError: On API infrastructure failures.
         """
         import time
 
         start_time = time.monotonic()
 
+        requested_rule_bases = list(rule_bases or [])
+        if requested_rule_bases and rule_base_store is None:
+            raise ValueError(
+                "rule_bases specified but rule_base_store is None. Pass "
+                "rule_base_store=... to translate_with_correction."
+            )
+
+        rule_bases_section = ""
+        rule_bases_truncated = False
+        if requested_rule_bases:
+            try:
+                rule_bases_section, rule_bases_truncated = (
+                    self._build_rule_bases_section(
+                        requested_rule_bases, rule_base_store
+                    )
+                )
+            except RuleBaseError as exc:
+                if exc.error_code in ("RULEBASE_001", "RULEBASE_002"):
+                    return TranslationResult(
+                        success=False,
+                        error=str(exc),
+                        metadata={
+                            "error_code": exc.error_code,
+                            "translation_time_ms": int(
+                                (time.monotonic() - start_time) * 1000
+                            ),
+                        },
+                    )
+                raise  # RULEBASE_004 → infra, propagate
+
+        def _metadata(extra: dict) -> dict:
+            md: dict = {
+                "translation_time_ms": int(
+                    (time.monotonic() - start_time) * 1000
+                ),
+            }
+            md.update(extra)
+            if rule_bases_truncated:
+                md["rule_bases_truncated"] = True
+            return md
+
         try:
-            prolog_code, suggested_query = await self.translate(query, context)
+            prolog_code, suggested_query = await self.translate(
+                query, context, rule_bases_section=rule_bases_section
+            )
         except TranslationError as exc:
             return TranslationResult(
                 success=False,
                 error=str(exc),
-                metadata={
-                    "error_code": exc.error_code,
-                    "translation_time_ms": int(
-                        (time.monotonic() - start_time) * 1000
-                    ),
-                },
+                metadata=_metadata({"error_code": exc.error_code}),
             )
 
         if max_corrections == 0:
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
             return TranslationResult(
                 success=True,
                 prolog_code=prolog_code,
                 suggested_query=suggested_query,
-                metadata={
-                    "correction_iterations": 0,
-                    "translation_time_ms": elapsed_ms,
-                },
+                metadata=_metadata({"correction_iterations": 0}),
+            )
+
+        correction_system_prompt = self.SYSTEM_PROMPT
+        if rule_bases_section:
+            correction_system_prompt = (
+                f"{correction_system_prompt}\n\n{rule_bases_section}"
             )
 
         for iteration in range(max_corrections):
             syntax_error = await executor.validate_syntax(prolog_code)
             if syntax_error is None:
-                elapsed_ms = int((time.monotonic() - start_time) * 1000)
                 return TranslationResult(
                     success=True,
                     prolog_code=prolog_code,
                     suggested_query=suggested_query,
-                    metadata={
-                        "correction_iterations": iteration,
-                        "translation_time_ms": elapsed_ms,
-                    },
+                    metadata=_metadata({"correction_iterations": iteration}),
                 )
 
             logger.info(
@@ -192,7 +250,7 @@ Keep the "% Query: <query>" comment."""
 
             try:
                 response = await self._llm.complete(
-                    system_prompt=self.SYSTEM_PROMPT,
+                    system_prompt=correction_system_prompt,
                     user_prompt=correction_prompt,
                     temperature=self._temperature,
                 )
@@ -206,19 +264,14 @@ Keep the "% Query: <query>" comment."""
             prolog_code = corrected
             suggested_query = self._extract_query(prolog_code)
 
-        # Final validation after all corrections
         final_error = await executor.validate_syntax(prolog_code)
-        elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
         if final_error is None:
             return TranslationResult(
                 success=True,
                 prolog_code=prolog_code,
                 suggested_query=suggested_query,
-                metadata={
-                    "correction_iterations": max_corrections,
-                    "translation_time_ms": elapsed_ms,
-                },
+                metadata=_metadata({"correction_iterations": max_corrections}),
             )
 
         return TranslationResult(
@@ -226,12 +279,75 @@ Keep the "% Query: <query>" comment."""
             prolog_code=prolog_code,
             suggested_query=suggested_query,
             error=f"Syntax errors remain after {max_corrections} corrections: {final_error}",
-            metadata={
+            metadata=_metadata({
                 "error_code": "TRANSLATION_002",
                 "correction_iterations": max_corrections,
-                "translation_time_ms": elapsed_ms,
-            },
+            }),
         )
+
+    _TRUNCATION_MARKER = "\n... [truncated]\n"
+
+    def _build_rule_bases_section(
+        self, names: list[str], store: RuleBaseStore
+    ) -> tuple[str, bool]:
+        """Resolve rule base names into a prompt section. The rule-base
+        body (concatenated blocks + join separators) is capped at
+        ``self._max_rule_prompt_bytes`` bytes; a fixed header is appended
+        unconditionally. Returns ``(section_text, truncated)``.
+
+        The truncation marker and inter-block ``\\n`` separators are both
+        reserved from the budget before slicing, so the final body never
+        exceeds the cap (design §4.3).
+
+        Raises:
+            RuleBaseError: propagated from ``store.get()``.
+        """
+        deduped = dedup_names(names)
+        budget = self._max_rule_prompt_bytes
+        marker_bytes = len(self._TRUNCATION_MARKER.encode("utf-8"))
+        blocks: list[str] = []
+        total_bytes = 0
+        truncated = False
+        for name in deduped:
+            text = store.get(name)
+            block = f"### {name}\n{text.rstrip()}\n"
+            block_bytes = len(block.encode("utf-8"))
+            # "\n".join(blocks) adds one separator byte between blocks;
+            # account for it against the budget from the second block on.
+            separator_bytes = 1 if blocks else 0
+            if total_bytes + separator_bytes + block_bytes > budget:
+                # Reserve separator + marker bytes so the slice fits exactly.
+                remaining = budget - total_bytes - separator_bytes - marker_bytes
+                if remaining > 0:
+                    encoded = block.encode("utf-8")[:remaining]
+                    safe = encoded.decode("utf-8", errors="ignore")
+                    blocks.append(safe + self._TRUNCATION_MARKER)
+                    total_bytes += (
+                        separator_bytes
+                        + len(safe.encode("utf-8"))
+                        + marker_bytes
+                    )
+                truncated = True
+                break
+            blocks.append(block)
+            total_bytes += separator_bytes + block_bytes
+        if not blocks:
+            if truncated:
+                # First rule base alone exceeds budget-minus-marker. Surface
+                # this so operators can raise max_rule_prompt_bytes rather
+                # than silently shipping an empty section.
+                logger.warning(
+                    "Rule bases section dropped entirely: first entry exceeds "
+                    "max_rule_prompt_bytes=%d (including marker overhead).",
+                    budget,
+                )
+            return "", truncated
+        body = "\n".join(blocks)
+        section = (
+            "Available rule bases (predicates already defined — prefer reusing "
+            "their names rather than inventing new ones):\n" + body
+        )
+        return section, truncated
 
     @staticmethod
     def _extract_query(prolog_code: str) -> str:

@@ -39,14 +39,12 @@ htmlcov/
 # Distribution
 *.tar.gz
 
-# Research notes (not part of the package)
-llm_prolog_research_report.md
-
 # Benchmark run artifacts (generated per run)
 benchmarks/results.json
 
 # Local assistant state
 .claude/
+.serena/
 
 # Local workspace (not tracked)
 .workspace/

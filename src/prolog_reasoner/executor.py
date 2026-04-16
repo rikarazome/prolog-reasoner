@@ -86,6 +86,70 @@ _TRACE_QUERY_WRAPPER_TEMPLATE = """\
 
 _PROOF_PREFIX = "__PR_PROOF__:"
 
+# clpfd operator prelude. `use_module(library(clpfd))` is *not* executed
+# during parse-only validation (too broad a blast radius — arbitrary code
+# would run). Instead we pre-declare the library's operator table so that
+# code containing `X #< Y`, `X in 1..5`, etc. parses cleanly. Operator
+# priorities/associativities mirror SWI-Prolog's library(clpfd) source; op/3
+# is idempotent so re-declaration by user code is harmless.
+_CLPFD_OPS_PRELUDE = """\
+:- op(760, yfx, #<==>).
+:- op(750, xfy, #==>).
+:- op(750, yfx, #<==).
+:- op(740, yfx, #\\/).
+:- op(730, yfx, #\\).
+:- op(720, yfx, #/\\).
+:- op(710,  fy, #\\).
+:- op(700, xfx, #>).
+:- op(700, xfx, #<).
+:- op(700, xfx, #>=).
+:- op(700, xfx, #=<).
+:- op(700, xfx, #=).
+:- op(700, xfx, #\\=).
+:- op(700, xfx, in).
+:- op(700, xfx, ins).
+:- op(450, xfx, ..).
+"""
+
+# Parse-only syntax validator script (v14). Reads each term from the user
+# content file without executing any directive except op/3 (needed so that
+# user-defined operators are visible to subsequent reads). See design §4.4.
+# A clpfd operator prelude is applied up-front so that common constraint
+# code parses even though :- use_module is not executed.
+# The user file path is substituted in via str.replace on __USER_FILE__.
+_PARSE_ONLY_SCRIPT_TEMPLATE = """\
+:- set_prolog_flag(verbose, silent).
+
+""" + _CLPFD_OPS_PRELUDE + """\
+
+parse_file(Path) :-
+    setup_call_cleanup(
+        open(Path, read, S, [encoding(utf8)]),
+        parse_terms(S),
+        close(S)
+    ).
+
+parse_terms(S) :-
+    read_term(S, T, []),
+    ( T == end_of_file
+    -> true
+    ;  apply_safe_directive(T),
+       parse_terms(S)
+    ).
+
+apply_safe_directive((:- op(P, A, Ops))) :- !, op(P, A, Ops).
+apply_safe_directive(_).
+
+:- catch(
+     parse_file('__USER_FILE__'),
+     Err,
+     ( print_message(error, Err),
+       halt(1)
+     )
+   ).
+:- halt(0).
+"""
+
 
 def _parse_trace_output(stdout: str) -> tuple[str, list[str]]:
     """Split trace-mode stdout into (display_output, proof_traces).
@@ -225,19 +289,31 @@ class PrologExecutor:
         self,
         prolog_code: str,
         query: str,
+        rule_base_contents: list[tuple[str, str]] | None = None,
         max_results: int = 100,
         timeout_seconds: float | None = None,
         trace: bool = False,
+        rule_base_load_ms: int | None = None,
     ) -> ExecutionResult:
         """Execute Prolog code with a query and return results.
 
         Args:
             prolog_code: Prolog facts and rules.
             query: Prolog query to execute.
+            rule_base_contents: Pre-resolved rule base contents as
+                (name, prolog_text) pairs. Name resolution and dedup are
+                the caller's responsibility; executor only concatenates
+                the texts in order and records the names in metadata.
             max_results: Maximum number of results (runaway prevention).
             timeout_seconds: Override default timeout. None uses settings value.
             trace: When True, return structured proof trees for each solution
                 in metadata["proof_trace"]. Adds meta-interpreter overhead.
+            rule_base_load_ms: Caller-measured time spent resolving rule base
+                names to content (disk I/O + any parsing). The executor never
+                measures this itself because rule base contents arrive already
+                resolved; only the caller (server.py / reasoner.py) sees the
+                ``store.get()`` boundary. When ``None`` the metadata field is
+                omitted entirely.
 
         Returns:
             ExecutionResult with output text and metadata.
@@ -254,15 +330,31 @@ class PrologExecutor:
             .replace("__QUERY__", query)
             .replace("__MAX_RESULTS__", str(max_results))
         )
+
+        rule_base_names: list[str] = []
+        rule_base_blocks: list[str] = []
+        for name, text in rule_base_contents or []:
+            rule_base_names.append(name)
+            rule_base_blocks.append(f"%% --- rule_base: {name} ---\n{text}")
+        rule_base_section = (
+            "\n".join(rule_base_blocks) + "\n" if rule_base_blocks else ""
+        )
+
         if trace:
             prolog_input = (
                 _UTF8_HEADER + "\n"
                 + _META_INTERPRETER + "\n"
+                + rule_base_section
                 + prolog_code + "\n"
                 + wrapper
             )
         else:
-            prolog_input = _UTF8_HEADER + "\n" + prolog_code + "\n" + wrapper
+            prolog_input = (
+                _UTF8_HEADER + "\n"
+                + rule_base_section
+                + prolog_code + "\n"
+                + wrapper
+            )
 
         start_time = time.monotonic()
 
@@ -374,7 +466,10 @@ class PrologExecutor:
                 "execution_time_ms": elapsed_ms,
                 "result_count": result_count,
                 "truncated": truncated,
+                "rule_bases_used": rule_base_names,
             }
+            if rule_base_load_ms is not None:
+                metadata["rule_base_load_ms"] = rule_base_load_ms
             if warnings:
                 metadata["prolog_warnings"] = warnings
             if trace:
@@ -393,24 +488,56 @@ class PrologExecutor:
                 pass
 
     async def validate_syntax(self, prolog_code: str) -> str | None:
-        """Check Prolog code for syntax errors via SWI-Prolog consult.
+        """Parse-only Prolog syntax check (v14).
 
-        Directives (e.g. :- use_module(...)) ARE executed as side effects.
-        This is acceptable for a local tool (see §5.1).
+        Uses ``read_term/3`` to read every term from ``prolog_code`` without
+        executing directives (``op/3`` is the only exception — needed so
+        that user-defined operators defined *inside the same file* are
+        visible to subsequent reads). See design §4.4.
+
+        Contract changes from v13 (consult-based):
+
+        * ``:- use_module(...)`` / ``:- initialization(...)`` / other
+          directive *runtime* errors are no longer detected; only true
+          parse errors surface here.
+        * Operators imported from libraries are **not** available during
+          parsing in general. As an exception, the validator pre-declares
+          ``library(clpfd)`` operators (``#<``, ``#=``, ``in``, ``ins``,
+          ``..``, etc.) so that typical constraint code parses correctly
+          without ``:- use_module`` being executed. Other libraries
+          (e.g. ``library(dif)`` with custom operators, third-party
+          libraries) are still not covered; callers relying on validation
+          for those must either (a) declare the operators explicitly via
+          ``:- op(...).`` at the top of the file or (b) skip validation.
 
         Returns:
             Error message string if syntax errors found, None if valid.
         """
-        code = _UTF8_HEADER + "\n" + prolog_code + "\n:- halt(0).\n"
-
-        tmp = tempfile.NamedTemporaryFile(
+        user_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".pl", encoding="utf-8", delete=False,
+        )
+        script_file = tempfile.NamedTemporaryFile(
             mode="w", suffix=".pl", encoding="utf-8", delete=False,
         )
         try:
             try:
-                tmp.write(code)
-                tmp.close()
-                proc = await self._start_swipl(tmp.name)
+                user_file.write(prolog_code)
+                # Terminator newline so a trailing comment without \n still
+                # parses; harmless if already newline-terminated.
+                if not prolog_code.endswith("\n"):
+                    user_file.write("\n")
+                user_file.close()
+
+                # Use forward-slash path so SWI-Prolog's single-quoted
+                # atom parses the same on Windows and POSIX.
+                user_path_posix = user_file.name.replace("\\", "/")
+                script = _PARSE_ONLY_SCRIPT_TEMPLATE.replace(
+                    "__USER_FILE__", user_path_posix
+                )
+                script_file.write(script)
+                script_file.close()
+
+                proc = await self._start_swipl(script_file.name)
             except Exception as exc:
                 raise BackendError(
                     f"Failed to start SWI-Prolog: {exc}",
@@ -433,13 +560,17 @@ class PrologExecutor:
             ]
             if error_lines:
                 return "\n".join(error_lines)
-
+            if proc.returncode not in (0, None):
+                return stderr_text or (
+                    f"Parse-only validator exited with code {proc.returncode}"
+                )
             return None
         finally:
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
+            for f in (user_file, script_file):
+                try:
+                    os.unlink(f.name)
+                except OSError:
+                    pass
 
     async def _start_swipl(self, script_path: str) -> asyncio.subprocess.Process:
         """Start a SWI-Prolog subprocess loading a script file."""

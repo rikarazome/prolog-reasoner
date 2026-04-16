@@ -44,5 +44,19 @@ class LLMError(PrologReasonerError):
 class ConfigurationError(PrologReasonerError):
     """Invalid configuration.
 
-    error_code: CONFIG_001
+    error_code:
+        CONFIG_001 — SWI-Prolog missing/broken (validate_swipl failure)
+        CONFIG_002 — bundled_rules_dir copy failure at startup (v14)
+    """
+
+
+class RuleBaseError(PrologReasonerError):
+    """Rule base CRUD failure (v14).
+
+    error_code:
+        RULEBASE_001 (rule_base_not_found)    — named rule base does not exist
+        RULEBASE_002 (rule_base_invalid_name) — name validation failed
+        RULEBASE_003 (rule_base_syntax_error) — parse-only syntax check failed
+        RULEBASE_004 (rule_base_io_error)     — file I/O failure (permissions, etc.)
+        RULEBASE_005 (rule_base_too_large)    — content exceeds max_rule_size
     """

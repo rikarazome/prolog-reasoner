@@ -16,7 +16,8 @@ Both surfaces share the same Prolog executor; the library adds an LLM-based tran
 
 ## Features
 
-- **MCP tool** (`execute_prolog`): run arbitrary SWI-Prolog code with a query
+- **MCP tools**: `execute_prolog` for arbitrary SWI-Prolog execution, plus `list_rule_bases` / `get_rule_base` / `save_rule_base` / `delete_rule_base` for reusable named rule bases (v14)
+- **Rule bases**: save stable Prolog rules once (e.g. chess move rules, legal axioms) and reference them by name from `execute_prolog` so the LLM only writes the situation-specific facts per call
 - **Transparent intermediate representation**: the Prolog code is the audit trail — inspect, modify, or verify before execution
 - **CLP(FD) support**: constraint logic programming for scheduling and optimization
 - **Negation-as-failure, recursion, all standard SWI-Prolog features**
@@ -46,7 +47,7 @@ pip install prolog-reasoner[all]
 
 ## MCP Server Setup
 
-The MCP server exposes a single tool, `execute_prolog`, that runs Prolog code written by the connected LLM. It does **not** call any external LLM API, so no API key is required.
+The MCP server exposes five tools — `execute_prolog` runs Prolog code written by the connected LLM, and four rule-base tools manage named, reusable Prolog modules. It does **not** call any external LLM API, so no API key is required.
 
 ### Claude Desktop / Claude Code
 
@@ -94,15 +95,46 @@ docker build -f docker/Dockerfile -t prolog-reasoner .
 
 ### Tool reference
 
-**`execute_prolog(prolog_code, query, max_results=100, trace=False)`**
+**`execute_prolog(prolog_code, query, rule_bases=None, max_results=100, trace=False)`**
 - `prolog_code` — Prolog facts and rules (string)
 - `query` — Prolog query to run, e.g. `"mortal(X)"` (string)
+- `rule_bases` — optional list of saved rule base names to prepend to `prolog_code` (in order). Use this to reuse stable domain rules across calls without re-sending them
 - `max_results` — cap the number of solutions returned (default 100)
 - `trace` — when `True`, attach a structured proof tree per solution to `metadata.proof_trace`. Opt-in sub-feature; has performance overhead and does not support CLP(FD), higher-order predicates, or assert/retract.
 
 Returns a JSON object with `success`, `output`, `query`, `error`, and `metadata`.
 
-On success, `metadata` includes `execution_time_ms`, `result_count`, and `truncated`. On failure, `metadata` also includes `error_category` (one of `syntax_error`, `undefined_predicate`, `unbound_variable`, `type_error`, `domain_error`, `evaluation_error`, `permission_error`, `timeout`, `trace_mechanism_error`, `unknown`) and `error_explanation` — a natural-language hint for the connected LLM (or human) to decide how to fix the Prolog code.
+On success, `metadata` includes `execution_time_ms`, `result_count`, `truncated`, and `rule_bases_used`. When rule bases were requested, `rule_base_load_ms` is also attached (disk I/O timing). On failure, `metadata` also includes `error_category` (one of `syntax_error`, `undefined_predicate`, `unbound_variable`, `type_error`, `domain_error`, `evaluation_error`, `permission_error`, `timeout`, `trace_mechanism_error`, `unknown`) and `error_explanation` — a natural-language hint for the connected LLM (or human) to decide how to fix the Prolog code.
+
+**Rule base tools** — manage named, reusable Prolog modules under `PROLOG_REASONER_RULES_DIR` (defaults to `~/.prolog-reasoner/rules/`). Names are restricted to `[a-z0-9_-]`, length 1–64.
+
+- **`save_rule_base(name, content)`** — write or overwrite a rule base. Content is syntax-validated (parse-only) before the write; failures surface as `RULEBASE_003`. Returns `{"success": true, "name": ..., "created": bool}` where `created` is `true` on first write, `false` on overwrite. Files over `max_rule_size` are rejected with `RULEBASE_005`.
+- **`list_rule_bases()`** — return all saved rule bases with `name`, `description`, and `tags`. Metadata is extracted from leading `% description:` / `% tags:` comments in each file.
+- **`get_rule_base(name)`** — return the raw Prolog source of a saved rule base.
+- **`delete_rule_base(name)`** — remove a saved rule base.
+
+For name/size/existence errors, the tools return `{"success": false, "error": "...", "error_code": "RULEBASE_001"|"RULEBASE_002"|"RULEBASE_003"|"RULEBASE_005"}` rather than raising. I/O failures (`RULEBASE_004`) are propagated as infrastructure errors.
+
+**Rule base conventions** — start each rule base file with leading comments that double as `list_rule_bases` metadata:
+
+```prolog
+% description: Chess piece movement rules
+% tags: chess, games
+
+piece_move(knight, (X1,Y1), (X2,Y2)) :- ...
+```
+
+Then reference from `execute_prolog`:
+
+```json
+{
+  "rule_bases": ["chess_moves"],
+  "prolog_code": "position(knight, (4,4)).",
+  "query": "piece_move(knight, (4,4), Target)"
+}
+```
+
+Rule bases also serve as the foundation for domain-specialized forks: ship a curated set (legal axioms, game rules, tax scenarios, etc.) bundled via `BUNDLED_RULES_DIR` as a ready-to-use reasoning package.
 
 ## Library Usage
 
@@ -174,6 +206,10 @@ All settings via environment variables (prefix `PROLOG_REASONER_`):
 | `LLM_TIMEOUT_SECONDS` | `30.0` | library |
 | `SWIPL_PATH` | `swipl` | both |
 | `EXECUTION_TIMEOUT_SECONDS` | `10.0` | both |
+| `RULES_DIR` | `~/.prolog-reasoner/rules` | both (where user-saved rule bases live) |
+| `BUNDLED_RULES_DIR` | unset | both (optional — synced into `RULES_DIR` on first startup for shipping default rules with a fork) |
+| `MAX_RULE_SIZE` | `1048576` (1 MiB) | both (per-file save cap; `save_rule_base` rejects larger content with `RULEBASE_005`) |
+| `MAX_RULE_PROMPT_BYTES` | `65536` (64 KiB) | library only (total budget for the "Available rule bases" prompt section; truncated with a marker when exceeded) |
 | `LOG_LEVEL` | `INFO` | both |
 
 ## Benchmark
@@ -219,8 +255,8 @@ Several Prolog MCP servers exist, each with different design choices. **prolog-r
 | | prolog-reasoner | Stateful Prolog MCPs |
 |---|---|---|
 | Prolog's role | Per-call reasoning tool | Project-wide knowledge base |
-| State | Stateless (each call independent) | Persistent sessions / layered KBs |
-| Reproducibility | Same input → same output, always | Depends on accumulated state |
+| State | Stateless execution (each call independent); optional named **rule bases** for reusable static rules, no inter-call session memory | Persistent sessions / layered KBs |
+| Reproducibility | Same input (incl. same rule bases) → same output, always | Depends on accumulated state |
 | Integration effort | Use where logic matters, skip where it doesn't | Architectural commitment |
 | A/B testable vs LLM-only | Yes (each call is a controlled experiment) | Structurally not comparable |
 

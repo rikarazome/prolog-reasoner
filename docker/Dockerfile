@@ -14,8 +14,9 @@ WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY src/ src/
 
-# Install package with all extras
-RUN pip install --no-cache-dir ".[all,dev]"
+# Editable install so volume-mounted sources (docker-compose.yml: dev/test)
+# are picked up without re-running pip after each edit.
+RUN pip install --no-cache-dir -e ".[all,dev]"
 
 # Copy tests, examples, benchmarks
 COPY tests/ tests/

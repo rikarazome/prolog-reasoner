@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.rikarazome/prolog-reasoner -->
 # prolog-reasoner
 
 [![PyPI version](https://img.shields.io/pypi/v/prolog-reasoner.svg)](https://pypi.org/project/prolog-reasoner/)

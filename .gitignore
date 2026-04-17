@@ -48,3 +48,6 @@ benchmarks/results.json
 
 # Local workspace (not tracked)
 .workspace/
+
+# MCP registry publisher
+mcp-publisher.exe

@@ -17,30 +17,40 @@ from prolog_reasoner.rule_base import RuleBaseStore, dedup_names
 
 logger = SecureLogger(__name__)
 
+_settings: Settings | None = None
 _executor: PrologExecutor | None = None
 _rule_base_store: RuleBaseStore | None = None
 
 
-def _init() -> None:
-    """Initialize settings, executor and rule base store on first use."""
-    global _executor, _rule_base_store
-    if _executor is not None:
+def _init_store() -> None:
+    """Initialize settings and rule base store (no SWI-Prolog required)."""
+    global _settings, _rule_base_store
+    if _rule_base_store is not None:
         return
-    settings = Settings()
-    settings.validate_swipl()
-    setup_logging(settings.log_level)
-    _executor = PrologExecutor(settings)
-    _rule_base_store = RuleBaseStore(settings, _executor)
+    _settings = Settings()
+    setup_logging(_settings.log_level)
+    _rule_base_store = RuleBaseStore(_settings)
     try:
-        _rule_base_store.sync_bundled(settings.bundled_rules_dir)
+        _rule_base_store.sync_bundled(_settings.bundled_rules_dir)
     except RuleBaseError as exc:
         raise ConfigurationError(
             (
                 f"Failed to sync bundled rule bases from "
-                f"{settings.bundled_rules_dir}: {exc}"
+                f"{_settings.bundled_rules_dir}: {exc}"
             ),
             error_code="CONFIG_002",
         ) from exc
+
+
+def _init_executor() -> None:
+    """Initialize SWI-Prolog executor (validates installation)."""
+    global _executor
+    _init_store()
+    if _executor is not None:
+        return
+    _settings.validate_swipl()
+    _executor = PrologExecutor(_settings)
+    _rule_base_store._executor = _executor
 
 
 mcp = FastMCP("prolog-reasoner")
@@ -94,7 +104,7 @@ async def execute_prolog(
         trace: When True, include structured proof trees per solution in
             metadata.proof_trace. Adds meta-interpreter overhead; opt-in.
     """
-    _init()
+    _init_executor()
     request = ExecutionRequest(
         prolog_code=prolog_code,
         query=query,
@@ -146,7 +156,7 @@ async def list_rule_bases() -> dict:
     from the leading ``% description:`` / ``% tags:`` comments of each
     rule base file (see §4.10).
     """
-    _init()
+    _init_store()
     infos = _rule_base_store.list()
     return {"rule_bases": [info.model_dump() for info in infos]}
 
@@ -154,7 +164,7 @@ async def list_rule_bases() -> dict:
 @mcp.tool()
 async def get_rule_base(name: str) -> dict:
     """Retrieve the Prolog source of a saved rule base."""
-    _init()
+    _init_store()
     try:
         content = _rule_base_store.get(name)
     except RuleBaseError as exc:
@@ -173,7 +183,7 @@ async def save_rule_base(name: str, content: str) -> dict:
     chess piece movement rules). For one-time facts, include them
     directly in ``prolog_code`` instead.
     """
-    _init()
+    _init_executor()
     try:
         created = await _rule_base_store.save(name, content)
     except RuleBaseError as exc:
@@ -186,7 +196,7 @@ async def save_rule_base(name: str, content: str) -> dict:
 @mcp.tool()
 async def delete_rule_base(name: str) -> dict:
     """Delete a saved rule base by name."""
-    _init()
+    _init_store()
     try:
         _rule_base_store.delete(name)
     except RuleBaseError as exc:

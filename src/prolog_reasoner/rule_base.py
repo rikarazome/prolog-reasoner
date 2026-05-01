@@ -102,7 +102,11 @@ def _not_found_error(name: str, available: list[str]) -> str:
 class RuleBaseStore:
     """Filesystem-backed rule base CRUD."""
 
-    def __init__(self, settings: Settings, executor: PrologExecutor) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        executor: PrologExecutor | None = None,
+    ) -> None:
         self.rules_dir: Path = settings.rules_dir
         self.max_size: int = settings.max_rule_size
         self._executor = executor
@@ -240,6 +244,12 @@ class RuleBaseStore:
                 error_code="RULEBASE_005",
             )
 
+        if self._executor is None:
+            raise RuleBaseError(
+                "Cannot validate syntax: SWI-Prolog executor not available. "
+                "Ensure SWI-Prolog is installed.",
+                error_code="RULEBASE_003",
+            )
         syntax_error = await self._executor.validate_syntax(content)
         if syntax_error is not None:
             raise RuleBaseError(

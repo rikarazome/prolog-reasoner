@@ -23,11 +23,14 @@ def _inject_executor(tmp_path):
     executor = PrologExecutor(settings)
     store = RuleBaseStore(settings, executor)
 
+    orig_settings = server_module._settings
     orig_executor = server_module._executor
     orig_store = server_module._rule_base_store
+    server_module._settings = settings
     server_module._executor = executor
     server_module._rule_base_store = store
     yield
+    server_module._settings = orig_settings
     server_module._executor = orig_executor
     server_module._rule_base_store = orig_store
 
@@ -79,8 +82,10 @@ class TestMCPTools:
     @pytest.mark.asyncio
     async def test_no_api_key_required(self):
         """MCP server works without any LLM API key."""
-        # Reset executor to force re-init from clean state
+        # Reset to force re-init from clean state
+        server_module._settings = None
         server_module._executor = None
+        server_module._rule_base_store = None
         result = await server_module.execute_prolog(
             prolog_code="fact(1). fact(2). fact(3).",
             query="fact(X)",
@@ -203,6 +208,7 @@ class TestRuleBaseTools:
         )
         executor = PrologExecutor(settings)
         store = RuleBaseStore(settings, executor)
+        monkeypatch.setattr(server_module, "_settings", settings)
         monkeypatch.setattr(server_module, "_rule_base_store", store)
         monkeypatch.setattr(server_module, "_executor", executor)
 
